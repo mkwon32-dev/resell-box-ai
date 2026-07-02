@@ -1,0 +1,19 @@
+# Dataset — ignore image/data files but keep folder structure via .gitkeep
+data/**
+!data/
+!data/raw/
+!data/raw/*/
+!data/raw/*/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+
+# Environment
+.env
+
+# OS / Editor
+.DS_Store
+.vscode/
