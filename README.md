@@ -1,76 +1,168 @@
-# resell-box-ai
-AI project for detecting box defects
-8-Week Project Schedule: ResellBox AI
+# ResellBox AI
 
-Week 1-2: Define Project Scope and Criteria, Prepare Data Collection and Take Sample Images
+AI system for detecting sneaker box damage and estimating resale-risk from photos.
 
-* Finalize the project scope as close-up damage risk analysis, not full sneaker box inspection.
-* Define the damage classes: normal, scratch, dent, tear, and stain.
-* Define the risk levels: Low, Caution, and High.
-* Separate the judging approach into numeric criteria mode and visual severity mode.
-* Create the overall data collection and labeling plan.
-* Prepare sneaker boxes, old shoe boxes, and general cardboard boxes.
-* Create multiple damage examples on each box, such as scratches, dents, tears, and stains.
-* Decide the close-up photo setup, including lighting, angle, and distance.
-* Take a small set of sample images first.
-* Check whether the labeling criteria are clear and realistic.
+## Goal
 
-Week 3: Data Collection and Labeling
+ResellBox AI analyzes box damage from a user-uploaded photo and returns:
 
-* Collect close-up images of damaged box areas.
-* Aim to collect around 400 to 500 labeled images.
-* Label each image with damage_type and risk_label.
-* Use Label Studio or Google Sheets with a folder structure for labeling.
-* Split the dataset into train, validation, and test sets.
+- damage type
+- detected damage location
+- estimated damage size
+- risk level: `Low`, `Caution`, or `High`
 
-Week 4: Model Preparation and Baseline Training
+This project is only a reference tool. It does **not** replace official resale inspection from platforms such as KREAM, StockX, or GOAT.
 
-* Organize and preprocess the image dataset.
-* Load a pretrained MobileNetV2 or MobileNetV3 model.
-* Replace the final classification layer with five output classes: normal, scratch, dent, tear, and stain.
-* Train a baseline damage classification model.
-* Evaluate the model using validation accuracy and a confusion matrix.
+## Damage Types
 
-Week 5: Model Improvement and OpenCV Features
+We use four damage classes for object detection:
 
-* Apply data augmentation to improve model generalization.
-* Check which damage classes the model struggles with.
-* Add more data or adjust labels if needed.
-* Build OpenCV-based image quality checks.
+- `scratch`
+- `dent`
+- `tear`
+- `stain`
 
-  * Blur detection
-  * Brightness check
-  * Damage visibility check
-* Experiment with simple damage size or area estimation if needed.
+`normal` images are used as negative examples with no bounding boxes.
 
-Week 6: Risk Scoring and App Prototype
+## System Design
 
-* Build a rule-based risk scoring system using model predictions and OpenCV outputs.
-* Example: scratch + small area = Low, dent + medium area = Caution, tear + large area = High.
-* Create a simple app interface where users can upload or take a close-up damage photo.
-* Show the result screen with damage type, risk level, and a short explanation.
+The system has three main parts:
 
-Week 7: Edge AI Deployment and System Integration
+1. **Roboflow / Object Detection**
+   - Detects damage location with bounding boxes.
+   - Classifies each detected damage as `scratch`, `dent`, `tear`, or `stain`.
 
-* Convert the trained model into a mobile-friendly format, such as TensorFlow Lite.
-* Test on-device inference on the Galaxy S25.
-* Connect the full workflow:
+2. **OpenCV Size Estimation**
+   - The user places a standard card next to the damaged area.
+   - OpenCV detects the card and converts pixels to centimeters.
+   - The app estimates damage length, area, and count.
 
-  * photo capture
-  * OpenCV quality check
-  * model prediction
-  * risk scoring
-  * result display
-* Measure inference speed and usability.
+3. **Rule-Based Risk Scoring**
+   - Risk is calculated from damage type, size, area, and count.
+   - Risk is not manually labeled during training.
 
-Week 8: Final Testing, Evaluation, and Presentation
+Example:
 
-* Evaluate the final system using real sneaker box test images.
-* Prepare sample outputs for Low, Caution, and High risk cases.
-* Identify cases where the model works well and cases where it struggles.
-* Discuss project limitations.
+```text
+tear + length >= 9 cm → High
+small scratch → Low
+medium dent → Caution
+large stain → High
+```
 
-  * It does not replace official resale inspection.
-  * It only analyzes close-up damage areas.
-  * The dataset size is limited.
-* Finalize the presentation slides and demo.
+## Data Labeling Plan
+
+Roboflow project type:
+
+```text
+Object Detection / Bounding Boxes
+```
+
+Labels:
+
+```text
+scratch
+dent
+tear
+stain
+```
+
+Labeling rules:
+
+- Draw a bounding box around each visible damage.
+- If one image has multiple damage types, label each damage separately.
+- Normal images should have no bounding box.
+- Do not label `risk_label` in Roboflow.
+- Risk is calculated later using OpenCV measurements and rules.
+
+## Reference Object
+
+For size estimation, the app uses a standard card as the fixed reference object.
+
+User instruction:
+
+```text
+Place a standard card next to the damaged area before taking the photo.
+```
+
+The card size is assumed to be approximately:
+
+```text
+8.56 cm × 5.398 cm
+```
+
+OpenCV finds the card, calculates the pixel-to-centimeter ratio, and applies it to the detected damage bounding box.
+
+## 5-Week Schedule
+
+### Week 1: Scope, Dataset Setup, and Labeling Rules
+
+- Finalize project direction: object detection + OpenCV size estimation.
+- Define damage classes: `scratch`, `dent`, `tear`, `stain`.
+- Treat `normal` as no-bbox negative examples.
+- Create Roboflow project.
+- Filter collected images and remove unclear examples.
+- Start manual labeling for clear examples.
+
+### Week 2: Data Labeling and Baseline Model
+
+- Label damage regions with bounding boxes.
+- Include multiple damage boxes if one image has multiple defects.
+- Train the first baseline model.
+- Check confusion matrix and weak classes.
+- Add or clean data based on early model results.
+
+### Week 3: OpenCV Measurement Module
+
+- Implement card detection with OpenCV.
+- Convert card pixel width to cm scale.
+- Use detected damage bbox to estimate length and area.
+- Add simple image quality checks:
+  - blur
+  - brightness
+  - visibility
+
+### Week 4: Risk Scoring and Prototype
+
+- Build rule-based risk scoring.
+- Combine:
+  - damage type
+  - bbox count
+  - estimated length
+  - estimated area
+- Create simple app/demo interface.
+- Show result:
+  - damage type
+  - size estimate
+  - risk level
+  - short explanation
+
+### Week 5: Testing, Edge Deployment, and Presentation
+
+- Test with real sneaker box images.
+- Convert model to mobile-friendly format if possible.
+- Test inference speed on Galaxy S25 or a local/mobile demo.
+- Prepare demo examples for `Low`, `Caution`, and `High`.
+- Summarize limitations:
+  - not official inspection
+  - limited dataset
+  - size estimation depends on card placement
+  - model may struggle with unclear or mixed damage
+
+## Final Output Example
+
+```text
+Damage Type: tear
+Detected Count: 1
+Estimated Length: 10.2 cm
+Risk Level: High
+Reason: Large tear detected over the high-risk length threshold.
+```
+
+## Tech Stack
+
+- Roboflow for annotation and dataset management
+- Object detection model such as YOLO or Roboflow Train
+- OpenCV for card detection and size estimation
+- Rule-based Python or JavaScript logic for risk scoring
+- TensorFlow Lite or another mobile-friendly model format for edge deployment
