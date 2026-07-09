@@ -20,7 +20,6 @@ We use four damage classes for object detection:
 - `scratch`
 - `dent`
 - `tear`
-- `stain`
 
 `normal` images are used as negative examples with no bounding boxes.
 
@@ -30,7 +29,7 @@ The system has three main parts:
 
 1. **Roboflow / Object Detection**
    - Detects damage location with bounding boxes.
-   - Classifies each detected damage as `scratch`, `dent`, `tear`, or `stain`.
+   - Classifies each detected damage as `scratch`, `dent`, or `tear`.
 
 2. **OpenCV Size Estimation**
    - The user places a standard card next to the damaged area.
@@ -47,7 +46,6 @@ Example:
 tear + length >= 9 cm → High
 small scratch → Low
 medium dent → Caution
-large stain → High
 ```
 
 ## Data Labeling Plan
@@ -64,7 +62,6 @@ Labels:
 scratch
 dent
 tear
-stain
 ```
 
 Labeling rules:
@@ -98,7 +95,7 @@ OpenCV finds the card, calculates the pixel-to-centimeter ratio, and applies it 
 ### Week 1: Scope, Dataset Setup, and Labeling Rules
 
 - Finalize project direction: object detection + OpenCV size estimation.
-- Define damage classes: `scratch`, `dent`, `tear`, `stain`.
+- Define damage classes: `scratch`, `dent`, or `tear`.
 - Treat `normal` as no-bbox negative examples.
 - Create Roboflow project.
 - Filter collected images and remove unclear examples.
