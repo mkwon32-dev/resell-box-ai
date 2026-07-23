@@ -1,0 +1,20 @@
+.env
+.env.local
+.vercel/
+__pycache__/
+
+# Flutter build outputs (app/.gitignore covers the rest)
+app/build/
+
+# Dataset workspace: images and venv stay local; only measurement/ code is tracked
+sneaker-box-dataset/.venv/
+sneaker-box-dataset/raw/
+sneaker-box-dataset/browser_search_damage/
+sneaker-box-dataset/full_box_damage_images/
+sneaker-box-dataset/review_batch/
+sneaker-box-dataset/quarantine/
+sneaker-box-dataset/measurement/out/
+
+# Vendored/unrelated subprojects
+browser-search/
+outreach/

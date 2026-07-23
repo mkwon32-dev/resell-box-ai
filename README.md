@@ -15,7 +15,7 @@ This project is only a reference tool. It does **not** replace official resale i
 
 ## Damage Types
 
-We use four damage classes for object detection:
+We use three damage classes for object detection:
 
 - `scratch`
 - `dent`
@@ -31,13 +31,18 @@ The system has three main parts:
    - Detects damage location with bounding boxes.
    - Classifies each detected damage as `scratch`, `dent`, or `tear`.
 
-2. **OpenCV Size Estimation**
-   - The user places a standard card next to the damaged area.
-   - OpenCV detects the card and converts pixels to centimeters.
-   - The app estimates damage length, area, and count.
+2. **OpenCV Box-Face Measurement**
+   - No reference object needed: the box itself is the scale reference.
+   - OpenCV finds the box silhouette, splits it into visible face panels,
+     and rectifies the damaged panel to fronto-parallel with a homography
+     (this makes the measurement robust to weird camera angles).
+   - Damage is measured as a fraction of the panel, then converted to cm
+     using a nominal sneaker-box length (33–37 cm; we assume 35 cm).
+   - The app reports estimated damage dimensions and detected count.
 
 3. **Rule-Based Risk Scoring**
-   - Risk is calculated from damage type, size, area, and count.
+   - Risk is calculated from damage type and longest measured side; the most
+     severe detection wins. Area/count rules are planned but not implemented.
    - Risk is not manually labeled during training.
 
 Example:
@@ -72,23 +77,39 @@ Labeling rules:
 - Do not label `risk_label` in Roboflow.
 - Risk is calculated later using OpenCV measurements and rules.
 
-## Reference Object
+## Size Estimation (card-free)
 
-For size estimation, the app uses a standard card as the fixed reference object.
+The box itself is the scale reference — the user only has to keep the whole
+box in frame. No card, coin, or ruler.
 
 User instruction:
 
 ```text
-Place a standard card next to the damaged area before taking the photo.
+Keep the whole box in frame when taking the photo.
 ```
 
-The card size is assumed to be approximately:
+Measurement ladder (`sneaker-box-dataset/measurement/measure_box_face.py`),
+from most to least accurate:
 
-```text
-8.56 cm × 5.398 cm
-```
+| Scene | Method | `scale_source` | Verdict behavior |
+|---|---|---|---|
+| Box face found | face quad → homography → panel-relative → cm | `box_face` | full cm rules |
+| Silhouette only | coarse scale: silhouette long edge = 35 cm | `box_edge` | full cm rules (coarse) |
+| Close-up, no box edges | no size emitted | `none` | Caution floor |
 
-OpenCV finds the card, calculates the pixel-to-centimeter ratio, and applies it to the detected damage bounding box.
+Why this beats the card: a reference card only gives a valid px→cm ratio when
+it is coplanar with the damage and the shot is fronto-parallel. When the face
+quad is correct, the homography rectifies the damaged panel itself so oblique
+angles are corrected. Classical face detection and assignment are still the
+dominant error source: the current synthetic benchmark has 37% median
+cross-face scale spread. Treat cm values as roughly ±30% estimates; the
+33–37 cm box-length prior adds about ±6%. Estimates are marked with `~`.
+
+The cm thresholds below are equivalent to panel-relative fractions (at the
+35 cm nominal): tear ≥ 9 cm ⇔ ≥ 0.26 of the panel's long dimension;
+dent ≥ 12 / ≥ 4 cm ⇔ ≥ 0.34 / ≥ 0.11; scratch ≥ 10 cm ⇔ ≥ 0.29;
+surface damage ≥ 8 cm ⇔ ≥ 0.23. Unmeasured damage (`none`) is floored at
+`Caution` — it can never be cleared as `Low`.
 
 ## 5-Week Schedule
 
@@ -111,8 +132,9 @@ OpenCV finds the card, calculates the pixel-to-centimeter ratio, and applies it 
 
 ### Week 3: OpenCV Measurement Module
 
-- Implement card detection with OpenCV.
-- Convert card pixel width to cm scale.
+- Implement box-silhouette + face-quad detection with OpenCV.
+- Rectify the damaged panel with a homography; convert panel fraction to cm
+  via the nominal box length.
 - Use detected damage bbox to estimate length and area.
 - Add simple image quality checks:
   - blur
@@ -143,7 +165,8 @@ OpenCV finds the card, calculates the pixel-to-centimeter ratio, and applies it 
 - Summarize limitations:
   - not official inspection
   - limited dataset
-  - size estimation depends on card placement
+  - sizes are estimates from typical box dimensions (33–37 cm), shown with `~`
+  - close-up photos without box edges are unsized and floored at `Caution`
   - model may struggle with unclear or mixed damage
 
 ## Final Output Example
@@ -160,6 +183,6 @@ Reason: Large tear detected over the high-risk length threshold.
 
 - Roboflow for annotation and dataset management
 - Object detection model such as YOLO or Roboflow Train
-- OpenCV for card detection and size estimation
+- OpenCV for box-face detection, homography rectification, and size estimation
 - Rule-based Python or JavaScript logic for risk scoring
 - TensorFlow Lite or another mobile-friendly model format for edge deployment
