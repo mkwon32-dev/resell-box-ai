@@ -43,19 +43,28 @@ class BboxOverlayPainter extends CustomPainter {
 
       final isHot = highlighted == i;
       final color = d.damageClass.color;
-      final paint = Paint()
-        ..color = isHot ? color : color.withValues(alpha: .85)
+      // Dark halo under the colored stroke keeps the box legible on any
+      // photo background (thin colored line alone vanished on dark shots).
+      final halo = Paint()
+        ..color = Colors.black.withValues(alpha: .6)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = isHot ? 2.5 : 1.5;
+        ..strokeWidth = isHot ? 6 : 5;
+      final paint = Paint()
+        ..color = isHot ? color : color.withValues(alpha: .95)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = isHot ? 3.5 : 2.5;
 
       // Self-drawing stroke: extract partial path around the rrect.
       final path = Path()
         ..addRRect(RRect.fromRectAndRadius(rect, const Radius.circular(3)));
       if (t >= 1) {
+        canvas.drawPath(path, halo);
         canvas.drawPath(path, paint);
       } else {
         for (final metric in path.computeMetrics()) {
-          canvas.drawPath(metric.extractPath(0, metric.length * t), paint);
+          final partial = metric.extractPath(0, metric.length * t);
+          canvas.drawPath(partial, halo);
+          canvas.drawPath(partial, paint);
         }
       }
 
@@ -68,6 +77,11 @@ class BboxOverlayPainter extends CustomPainter {
   void _drawPin(Canvas canvas, Rect rect, int index, Color color, bool hot) {
     const r = 10.0;
     final center = Offset(rect.left, rect.top);
+    canvas.drawCircle(
+      center,
+      r + 1.5,
+      Paint()..color = Colors.black.withValues(alpha: .6),
+    );
     canvas.drawCircle(center, r, Paint()..color = color);
     if (hot) {
       canvas.drawCircle(
