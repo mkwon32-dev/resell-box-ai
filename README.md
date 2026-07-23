@@ -2,6 +2,8 @@
 
 AI system for detecting sneaker box damage and estimating resale-risk from photos.
 
+**[⬇ Download the Android app (APK)](https://github.com/mkwon32-dev/resell-box-ai/releases/latest)** — install on any Android phone; no setup, talks to the hosted backend.
+
 ## Goal
 
 ResellBox AI analyzes box damage from a user-uploaded photo and returns:
