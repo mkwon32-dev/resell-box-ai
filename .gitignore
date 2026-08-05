@@ -18,3 +18,4 @@ sneaker-box-dataset/measurement/out/
 # Vendored/unrelated subprojects
 browser-search/
 outreach/
+.DS_Store
