@@ -5,17 +5,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'data/db/app_database.dart';
 import 'data/models/analysis_result.dart';
 import 'data/repositories/analysis_repository.dart';
-import 'data/repositories/http_analysis_repository.dart';
-import 'data/repositories/mock_analysis_repository.dart';
+import 'data/repositories/qnn_analysis_repository.dart';
 
 /// Real backend (backend/app.py) when built with
 /// `--dart-define=BACKEND_URL=http://host:8000`, mock otherwise.
-const _backendUrl = String.fromEnvironment('BACKEND_URL');
-
 final analysisRepositoryProvider = Provider<AnalysisRepository>(
-  (ref) => _backendUrl.isEmpty
-      ? MockAnalysisRepository()
-      : HttpAnalysisRepository(baseUrl: _backendUrl),
+  (ref) => QnnAnalysisRepository(),
 );
 
 final databaseProvider = Provider<AppDatabase>((ref) {
