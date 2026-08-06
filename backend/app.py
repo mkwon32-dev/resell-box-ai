@@ -12,7 +12,7 @@ backend verdict can only escalate, never downgrade.
 
 Config (env):
   ROBOFLOW_API_KEY   required (put it in backend/.env, which is gitignored)
-  ROBOFLOW_MODEL_ID  default "box_ai_detection/9"
+  ROBOFLOW_MODEL_ID  default "box_ai_detection/12"
   ROBOFLOW_BASE_URL  default "https://detect.roboflow.com"
   CONFIDENCE         default "0.4"
 
@@ -51,7 +51,7 @@ def _load_dotenv() -> None:
 
 _load_dotenv()
 
-MODEL_ID = os.environ.get("ROBOFLOW_MODEL_ID", "box_ai_detection/9")
+MODEL_ID = os.environ.get("ROBOFLOW_MODEL_ID", "box_ai_detection/12")
 BASE_URL = os.environ.get("ROBOFLOW_BASE_URL", "https://detect.roboflow.com")
 CONFIDENCE = float(os.environ.get("CONFIDENCE", "0.4"))
 
