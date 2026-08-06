@@ -5,13 +5,21 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'data/db/app_database.dart';
 import 'data/models/analysis_result.dart';
 import 'data/repositories/analysis_repository.dart';
+import 'data/repositories/http_analysis_repository.dart';
+import 'data/repositories/mock_analysis_repository.dart';
 import 'data/repositories/qnn_analysis_repository.dart';
 
-/// Real backend (backend/app.py) when built with
-/// `--dart-define=BACKEND_URL=http://host:8000`, mock otherwise.
-final analysisRepositoryProvider = Provider<AnalysisRepository>(
-  (ref) => QnnAnalysisRepository(),
-);
+/// Backend (backend/app.py, box_face-quality sizing) when built with
+/// `--dart-define=BACKEND_URL=http://host:8000`; otherwise on-device
+/// TFLite inference on Android and the mock everywhere else.
+const _backendUrl = String.fromEnvironment('BACKEND_URL');
+
+final analysisRepositoryProvider = Provider<AnalysisRepository>((ref) {
+  if (_backendUrl.isNotEmpty) {
+    return HttpAnalysisRepository(baseUrl: _backendUrl);
+  }
+  return Platform.isAndroid ? QnnAnalysisRepository() : MockAnalysisRepository();
+});
 
 final databaseProvider = Provider<AppDatabase>((ref) {
   final db = AppDatabase();

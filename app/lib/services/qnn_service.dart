@@ -12,8 +12,10 @@ class QnnService {
       'analyzeImage',
       {
         'imagePath': image.path,
-        'confidenceThreshold': 0.20,
-        'nmsThreshold': 0.45,
+        // Per the model card (app/assets/models/box_ai_v12_fp16.json):
+        // precision 0.87 at confidence 0.6, per-class NMS IoU 0.5.
+        'confidenceThreshold': 0.60,
+        'nmsThreshold': 0.50,
       },
     );
 

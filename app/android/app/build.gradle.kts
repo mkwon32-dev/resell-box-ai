@@ -32,6 +32,15 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    // The .tflite asset must stay uncompressed so it can be memory-mapped.
+    androidResources {
+        noCompress += "tflite"
+    }
+}
+
+dependencies {
+    implementation("org.tensorflow:tensorflow-lite:2.16.1")
 }
 
 kotlin {

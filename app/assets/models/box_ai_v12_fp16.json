@@ -1,0 +1,27 @@
+{
+  "model": "box_ai_detection/12",
+  "architecture": "yolo11s",
+  "source": "Roboflow ONNX weights (api.roboflow.com/ort) converted via onnx2tf 2.6.7 -> TFLite fp16",
+  "input": {
+    "shape": [1, 640, 640, 3],
+    "layout": "NHWC",
+    "dtype": "float32",
+    "normalization": "pixel / 255.0",
+    "preprocessing": "fit within 640x640 (aspect preserved), pad right/bottom with rgb(114,114,114)"
+  },
+  "output": {
+    "shape": [1, 6, 8400],
+    "rows": ["cx", "cy", "w", "h", "conf_dent", "conf_surface_damage"],
+    "coords": "pixels in 640x640 input space",
+    "postprocessing": "argmax class, confidence floor, per-class NMS iou 0.5"
+  },
+  "classes": ["dent", "surface_damage"],
+  "recommended_confidence": 0.6,
+  "eval": {
+    "test_set": "v14 test split, 53 images, 82 boxes",
+    "map50": 0.735,
+    "precision_at_0.6": 0.87,
+    "recall_at_0.6": 0.66,
+    "hosted_v12_map50_reference": 0.723
+  }
+}
