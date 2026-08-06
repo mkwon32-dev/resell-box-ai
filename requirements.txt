@@ -1,0 +1,19 @@
+# Step 1 - scraping
+requests
+python-dotenv
+tqdm
+
+# Step 2 - CLIP similarity filtering
+# torch install can be platform/CUDA-specific; if this default pip install
+# doesn't fit your setup, install torch first per https://pytorch.org/get-started/locally/
+torch
+open_clip_torch
+pillow
+
+# Step 3 - location distribution review
+opencv-python
+matplotlib
+numpy
+
+# Damage detection (YOLO11s) + card measurement pipeline
+ultralytics
