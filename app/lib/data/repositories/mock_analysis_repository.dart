@@ -134,12 +134,18 @@ class MockAnalysisRepository implements AnalysisRepository {
       ],
     };
 
+    final scaleSource = scenario == 2 ? ScaleSource.none : ScaleSource.boxFace;
     return AnalysisResult(
       imageWidth: w.round(),
       imageHeight: h.round(),
       detections: detections,
-      verdict: computeVerdict(detections),
-      scaleSource: scenario == 2 ? ScaleSource.none : ScaleSource.boxFace,
+      verdict: computeVerdict(
+        detections,
+        imageWidth: w.round(),
+        imageHeight: h.round(),
+        hasScale: scaleSource.hasScale,
+      ),
+      scaleSource: scaleSource,
     );
   }
 

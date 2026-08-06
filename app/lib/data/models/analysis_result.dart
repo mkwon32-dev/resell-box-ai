@@ -108,7 +108,12 @@ class AnalysisResult {
 
     // Never allow a stale or compromised backend verdict to downgrade damage
     // that the documented local rules classify more severely.
-    final computedVerdict = computeVerdict(usableDetections);
+    final computedVerdict = computeVerdict(
+      usableDetections,
+      imageWidth: imageWidth,
+      imageHeight: imageHeight,
+      hasScale: scaleSource.hasScale,
+    );
     final backendVerdict = rawVerdict == null
         ? computedVerdict
         : RiskVerdict.fromString(rawVerdict as String);

@@ -47,7 +47,21 @@ extension RiskVerdictX on RiskVerdict {
 
 /// Client-side fallback implementing the README risk rules.
 /// Used by the mock repository and whenever the backend omits a verdict.
-RiskVerdict computeVerdict(List<Detection> detections) {
+///
+/// Besides the per-detection type + longest-side rules, two aggregate
+/// escalations cover damage no single detection captures:
+///  - 3+ detections floor at caution: widespread damage stays serious
+///    even when every individual spot is small.
+///  - With real scale (box_edge/box_face — the frame is roughly the box),
+///    detections covering ≥20% of the image mean a large share of the box
+///    is damaged → high. Gated on scale because a close-up of one small
+///    dent fills the frame without meaning anything about the box.
+RiskVerdict computeVerdict(
+  List<Detection> detections, {
+  int imageWidth = 0,
+  int imageHeight = 0,
+  bool hasScale = false,
+}) {
   if (detections.isEmpty) return RiskVerdict.low;
   var verdict = RiskVerdict.low;
   for (final d in detections) {
@@ -69,6 +83,19 @@ RiskVerdict computeVerdict(List<Detection> detections) {
       DamageClass.unknown => RiskVerdict.caution,
     };
     if (v.index > verdict.index) verdict = v;
+  }
+
+  if (detections.length >= 3 && verdict == RiskVerdict.low) {
+    verdict = RiskVerdict.caution;
+  }
+
+  final imageArea = imageWidth.toDouble() * imageHeight.toDouble();
+  if (hasScale && imageArea > 0) {
+    var damageArea = 0.0;
+    for (final d in detections) {
+      damageArea += d.width * d.height;
+    }
+    if (damageArea >= imageArea * 0.20) verdict = RiskVerdict.high;
   }
   return verdict;
 }

@@ -61,6 +61,55 @@ void main() {
     });
   });
 
+  group('aggregate escalations', () {
+    test('3+ small detections floor at caution even if each is low', () {
+      final small = [
+        d(DamageClass.dent, cm: 1),
+        d(DamageClass.scratch, cm: 1),
+        d(DamageClass.surfaceDamage, cm: 1),
+      ];
+      expect(computeVerdict(small), RiskVerdict.caution);
+      expect(computeVerdict(small.sublist(0, 2)), RiskVerdict.low);
+    });
+
+    test('sized damage covering ≥20% of the frame → high', () {
+      final wide = Detection(
+        x: 320,
+        y: 240,
+        width: 400,
+        height: 200,
+        damageClass: DamageClass.dent,
+        confidence: .9,
+        widthCm: 3, // per-detection rule alone would say low
+        heightCm: 1.5,
+      );
+      expect(
+        computeVerdict(
+          [wide],
+          imageWidth: 640,
+          imageHeight: 480,
+          hasScale: true,
+        ),
+        RiskVerdict.high,
+      );
+    });
+
+    test('area rule is inert without scale (close-up fills the frame)', () {
+      final closeUp = Detection(
+        x: 320,
+        y: 240,
+        width: 600,
+        height: 400,
+        damageClass: DamageClass.dent,
+        confidence: .9,
+      );
+      expect(
+        computeVerdict([closeUp], imageWidth: 640, imageHeight: 480),
+        RiskVerdict.caution, // unsized floor, not area-escalated high
+      );
+    });
+  });
+
   group('string parsing', () {
     test('RiskVerdict.fromString case-insensitive', () {
       expect(RiskVerdict.fromString('HIGH'), RiskVerdict.high);
