@@ -10,10 +10,24 @@ app/build/
 sneaker-box-dataset/.venv/
 sneaker-box-dataset/raw/
 sneaker-box-dataset/browser_search_damage/
+sneaker-box-dataset/browser_search_damage_disjoint/
 sneaker-box-dataset/full_box_damage_images/
 sneaker-box-dataset/review_batch/
 sneaker-box-dataset/quarantine/
 sneaker-box-dataset/measurement/out/
+sneaker-box-dataset/dent_noncorner_images/
+sneaker-box-dataset/organized/
+sneaker-box-dataset/review_sheets_model_assist/
+sneaker-box-dataset/scratch_varied_location_images/
+sneaker-box-dataset/test_boxonly/
+sneaker-box-dataset/*.md
+sneaker-box-dataset/*.json
+sneaker-box-dataset/*.csv
+
+# Local model exports; the deployed copy lives in the app's android assets.
+# The .json model card is tracked as the record of what was exported.
+app/assets/models/*
+!app/assets/models/*.json
 
 # Vendored/unrelated subprojects
 browser-search/
