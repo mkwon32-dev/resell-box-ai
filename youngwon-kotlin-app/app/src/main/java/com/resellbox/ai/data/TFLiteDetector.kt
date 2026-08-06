@@ -44,6 +44,7 @@ class TFLiteDetector(
             .map { it.trim() }.filter { it.isNotEmpty() }
 
     private var nnapi: NnApiDelegate? = null
+    private var qnnDelegate: Any? = null   // 리플렉션으로 로드한 QNN delegate (있을 때만)
     private val interpreter: Interpreter
 
     private val inW: Int
@@ -250,10 +251,11 @@ class TFLiteDetector(
      * QNN 이 없거나 비-Qualcomm 기기이면 NNAPI/CPU 로 자동 폴백.
      */
     private fun configureDelegate(options: Interpreter.Options) {
-        // ===================== QNN INSERTION POINT =====================
-        // if (tryAddQnnDelegate(options)) return   // ← 팀원이 여기 활성화
-        // ===============================================================
+        // 1순위: QNN(Qualcomm NPU). .so 라이브러리 + AAR 이 앱에 있으면 자동 활성화.
+        //        없으면(에뮬레이터·비-Qualcomm) false → 아래 NNAPI/CPU 로 폴백.
+        if (tryAddQnnDelegate(options)) return
 
+        // 2순위: 실기기 NNAPI(NPU). 에뮬레이터는 결과가 부정확할 수 있어 CPU.
         if (!isEmulator()) {
             try {
                 nnapi = NnApiDelegate()
@@ -263,9 +265,64 @@ class TFLiteDetector(
                 options.setNumThreads(4)
             }
         } else {
-            // 에뮬레이터의 NNAPI 는 결과가 부정확할 수 있어 CPU 사용
             options.setNumThreads(4)
         }
+    }
+
+    /**
+     * QNN(Qualcomm QNN/QAIRT) TFLite delegate 를 리플렉션으로 붙인다.
+     *
+     * 팀원이 할 일은 딱 하나 — QNN SDK 의 라이브러리를 앱에 추가하는 것:
+     *   1) app/src/main/jniLibs/arm64-v8a/ 에 QNN .so 들 복사
+     *      (libQnnTFLiteDelegate.so, libQnnHtp.so, libQnnHtpV79Stub.so,
+     *       libQnnHtpV79Skel.so, libQnnSystem.so 등 — SDK 실제 파일명)
+     *   2) build.gradle.kts 에 QNN delegate AAR 추가
+     *      implementation(files("libs/QnnDelegate.aar"))
+     *
+     * 그러면 이 함수가 런타임에 QnnDelegate 를 찾아 HTP(NPU) 백엔드로 붙인다.
+     * QNN 이 없으면(에뮬레이터/비-Qualcomm) 조용히 false 를 반환해 NNAPI/CPU 로 폴백한다.
+     * → 코드는 QNN 없이도 그대로 컴파일·실행된다(리플렉션이라 컴파일 의존성 없음).
+     *
+     * ⚠️ 클래스/메서드명은 표준 QNN delegate API 기준. SDK 버전이 다르면
+     *    아래 QNN_* 상수만 실제 API 에 맞게 바꾸면 된다.
+     */
+    private fun tryAddQnnDelegate(options: Interpreter.Options): Boolean {
+        return try {
+            val delegateCls = Class.forName(QNN_DELEGATE_CLASS)
+            val optionsCls = Class.forName(QNN_OPTIONS_CLASS)
+            val opts = optionsCls.getConstructor().newInstance()
+
+            // HTP(NPU) 백엔드 — 필수
+            setEnumOption(optionsCls, opts, "setBackendType",
+                "$QNN_OPTIONS_CLASS\$BackendType", "HTP_BACKEND")
+            // 성능 모드 BURST — 있으면 적용, 없으면 스킵
+            setEnumOption(optionsCls, opts, "setHtpPerformanceMode",
+                "$QNN_OPTIONS_CLASS\$HtpPerformanceMode", "HTP_PERFORMANCE_BURST")
+            // float16 정밀도(우리 모델) — 있으면 적용, 없으면 스킵
+            setEnumOption(optionsCls, opts, "setHtpPrecision",
+                "$QNN_OPTIONS_CLASS\$HtpPrecision", "HTP_PRECISION_FP16")
+
+            val delegate = delegateCls.getConstructor(optionsCls).newInstance(opts)
+            options.addDelegate(delegate as org.tensorflow.lite.Delegate)
+            qnnDelegate = delegate
+            true
+        } catch (_: Throwable) {
+            // QNN .so/AAR 없음 또는 API 불일치 → 폴백
+            qnnDelegate = null
+            false
+        }
+    }
+
+    /** enum 옵션 메서드가 존재하면 호출, 없으면 조용히 스킵. */
+    private fun setEnumOption(
+        optionsCls: Class<*>, opts: Any, method: String,
+        enumClassName: String, enumValue: String
+    ) {
+        try {
+            val enumCls = Class.forName(enumClassName)
+            val value = enumCls.getMethod("valueOf", String::class.java).invoke(null, enumValue)
+            optionsCls.getMethod(method, enumCls).invoke(opts, value)
+        } catch (_: Throwable) { /* 이 옵션은 스킵 */ }
     }
 
     private fun isEmulator(): Boolean {
@@ -276,8 +333,19 @@ class TFLiteDetector(
             Build.PRODUCT.contains("sdk", true)
     }
 
+    /** QNN(NPU) delegate 가 실제로 붙었는지 (디버그/로깅용). */
+    val usingQnn: Boolean get() = qnnDelegate != null
+
     override fun close() {
         interpreter.close()
         nnapi?.close()
+        (qnnDelegate as? AutoCloseable)?.let { runCatching { it.close() } }
+    }
+
+    companion object {
+        // 표준 Qualcomm QNN TFLite delegate 클래스명.
+        // SDK 버전이 다르면 이 두 값만 실제 API 에 맞게 바꾸면 된다.
+        private const val QNN_DELEGATE_CLASS = "com.qualcomm.qti.QnnDelegate"
+        private const val QNN_OPTIONS_CLASS = "com.qualcomm.qti.QnnDelegate\$Options"
     }
 }

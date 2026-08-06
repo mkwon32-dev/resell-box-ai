@@ -72,18 +72,31 @@ app/src/main/jniLibs/arm64-v8a/                            ← QAIRT SDK 의 .so
 - S25 실행 → 같은 테스트 이미지로 `surface_damage` 박스 1개(NMS 후) 재현되면 성공.
 - TFLite(우리)와 **같은 박스**가 나와야 정상(같은 모델).
 
-## 부록: QNN delegate (대안 B)
-`.tflite` 유지 + `libQnnTFLiteDelegate.so` 추가 후,
-`TFLiteDetector.configureDelegate()` 의 "QNN INSERTION POINT" 에서:
-```kotlin
-val opt = QnnDelegate.Options().apply {
-    setBackendType(QnnDelegate.Options.BackendType.HTP_BACKEND)
-    setHtpPerformanceMode(QnnDelegate.Options.HtpPerformanceMode.HTP_PERFORMANCE_BURST)
-    setHtpPrecision(QnnDelegate.Options.HtpPrecision.HTP_PRECISION_FP16)
-}
-options.addDelegate(QnnDelegate(opt))
-```
-NCHW 변환 불필요(.tflite 그대로). 실패 시 NNAPI/CPU 폴백.
+## B. QNN delegate — 연결 코드 이미 내장됨 ⭐ (팀원은 .so 만 추가)
+`.tflite` 를 그대로 쓰는 경로. **연결 코드는 `TFLiteDetector` 에 이미 들어있다**
+(리플렉션 방식이라 QNN 없이도 컴파일·실행됨 — 에뮬레이터는 자동으로 NNAPI/CPU 폴백).
+
+**팀원이 할 일은 라이브러리 추가 2가지뿐:**
+1. `app/src/main/jniLibs/arm64-v8a/` 에 QNN `.so` 복사
+   ```
+   libQnnTFLiteDelegate.so, libQnnHtp.so, libQnnHtpV79Stub.so,
+   libQnnHtpV79Skel.so, libQnnSystem.so   (SDK 실제 파일명)
+   ```
+2. `app/build.gradle.kts` 에 delegate AAR + jniLibs 패키징:
+   ```kotlin
+   android { packaging { jniLibs { useLegacyPackaging = true } } }
+   dependencies { implementation(files("libs/QnnDelegate.aar")) }  // SDK 제공 AAR
+   ```
+
+이러면 앱 실행 시 `TFLiteDetector.tryAddQnnDelegate()` 가 런타임에 QnnDelegate 를
+자동으로 찾아 **HTP(NPU) 백엔드**로 붙인다. 코드 수정 불필요.
+
+**SDK 버전이 달라 클래스/메서드명이 다르면** — `TFLiteDetector` 하단 companion 의
+`QNN_DELEGATE_CLASS` / `QNN_OPTIONS_CLASS` 두 상수, 또는 `tryAddQnnDelegate()` 안의
+`"setBackendType"` 등 메서드명 문자열만 실제 API 에 맞게 바꾸면 된다.
+
+확인: S25 실행 시 `TFLiteDetector.usingQnn == true` 면 QNN 활성. 같은 이미지로
+TFLite(NNAPI) 때와 동일한 박스가 나오면 성공.
 
 ---
 ## 공통 주의
