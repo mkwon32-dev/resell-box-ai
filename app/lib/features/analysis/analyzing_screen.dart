@@ -50,7 +50,12 @@ class _AnalyzingScreenState extends ConsumerState<AnalyzingScreen>
       }
     });
     _loadAssets();
-    _run();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _run();
+      }
+    });
   }
 
   void _tick(Duration elapsed) {
@@ -111,7 +116,10 @@ class _AnalyzingScreenState extends ConsumerState<AnalyzingScreen>
       if (!mounted) return;
       _pendingScanId = scanId;
       setState(() => _done = true);
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint('ANALYSIS SCREEN ERROR: $e');
+      debugPrintStack(stackTrace: stackTrace);
+
       if (mounted) {
         _ticker.stop();
         _captionTimer?.cancel();
@@ -155,6 +163,11 @@ class _AnalyzingScreenState extends ConsumerState<AnalyzingScreen>
                 Text('SCAN FAILED', style: text.displaySmall),
                 const SizedBox(height: AppTokens.s3),
                 Text('Could not analyze this photo.', style: text.bodyMedium),
+            const SizedBox(height: AppTokens.s3),
+            Text(
+              _error.toString(),
+              style: text.bodySmall,
+            ),
                 const SizedBox(height: AppTokens.s5),
                 FilledButton(
                   onPressed: () => context.pushReplacement('/capture'),
