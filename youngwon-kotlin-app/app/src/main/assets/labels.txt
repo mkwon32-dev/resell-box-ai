@@ -1,2 +1,0 @@
-dent
-surface_damage

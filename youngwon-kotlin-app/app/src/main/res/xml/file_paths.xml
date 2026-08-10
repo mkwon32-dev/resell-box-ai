@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<paths>
-    <!-- cacheDir 에 만든 카메라 임시 파일 공유용 -->
-    <cache-path name="captures" path="." />
-</paths>
