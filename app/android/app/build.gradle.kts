@@ -51,5 +51,6 @@ flutter {
 
 dependencies {
     implementation("org.tensorflow:tensorflow-lite:2.16.1")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
     implementation(files("libs/qtld-release.aar"))
 }

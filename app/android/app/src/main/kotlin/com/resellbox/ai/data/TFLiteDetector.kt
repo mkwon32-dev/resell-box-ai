@@ -7,7 +7,9 @@ import android.util.Log
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
 import org.tensorflow.lite.nnapi.NnApiDelegate
+import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.MappedByteBuffer
@@ -33,7 +35,8 @@ class TFLiteDetector(
     modelAsset: String = "model.tflite",
     labelsAsset: String = "labels.txt",
     private val confThreshold: Float = 0.20f,
-    private val iouThreshold: Float = 0.45f
+    private val iouThreshold: Float = 0.45f,
+    private val forceCpuOnly: Boolean = false
 ) : AutoCloseable {
 
     sealed class Result {
@@ -54,6 +57,8 @@ class TFLiteDetector(
             .map { it.trim() }
             .filter { it.isNotEmpty() }
 
+    private val appContext: Context = context.applicationContext
+
     private var nnapi: NnApiDelegate? = null
     private var qnnDelegate: Any? = null
 
@@ -69,7 +74,12 @@ class TFLiteDetector(
         val model = loadModel(context, modelAsset)
         val options = Interpreter.Options()
 
-        configureDelegate(context, options)
+        if (forceCpuOnly) {
+            Log.w(TAG, "CPU-only override enabled: skipping NNAPI/QNN delegates")
+            options.setNumThreads(4)
+        } else {
+            configureDelegate(context, options)
+        }
 
         interpreter = try {
             val createdInterpreter = Interpreter(model, options)
@@ -145,6 +155,11 @@ class TFLiteDetector(
             val origW = bitmap.width
             val origH = bitmap.height
 
+            Log.i(
+                TAG,
+                "Android detection start: orig=${origW}x${origH}, input=${inW}x${inH}, accelerator=$acceleratorName, modelType=${inType}, confThreshold=$confThreshold, iouThreshold=$iouThreshold"
+            )
+
             // YOLO letterbox preprocessing.
             val scale = min(
                 inW / origW.toFloat(),
@@ -156,6 +171,11 @@ class TFLiteDetector(
 
             val padX = (inW - newW) / 2f
             val padY = (inH - newH) / 2f
+
+            Log.i(
+                TAG,
+                "YOLO preprocess: orig=${origW}x${origH}, inW=$inW, inH=$inH, scale=$scale, newW=$newW, newH=$newH, padX=$padX, padY=$padY"
+            )
 
             val resized = Bitmap.createScaledBitmap(
                 bitmap,
@@ -187,6 +207,8 @@ class TFLiteDetector(
                 )
             }
 
+            saveDebugInput(canvasBmp)
+
             val input = buildInputBuffer(canvasBmp)
 
             val outT = interpreter.getOutputTensor(0)
@@ -194,6 +216,11 @@ class TFLiteDetector(
             val outBuf = ByteBuffer
                 .allocateDirect(outT.numBytes())
                 .order(ByteOrder.nativeOrder())
+
+            Log.i(
+                TAG,
+                "Input tensor dtype=${inType}, output tensor shape=${outT.shape().contentToString()}, output dtype=${outT.dataType()}"
+            )
 
             interpreter.run(input, outBuf)
 
@@ -216,8 +243,20 @@ class TFLiteDetector(
 
             Log.i(
                 TAG,
-                "Inference completed: accelerator=$acceleratorName, detections=${finalPredictions.size}"
+                "Inference completed: accelerator=$acceleratorName, rawCandidatesAboveThreshold=${preds.size}, detectionsAfterNMS=${finalPredictions.size}"
             )
+            for (pred in preds) {
+                Log.i(
+                    TAG,
+                    "RAW_DETECTION candidate class=${pred.clazz}, confidence=${pred.confidence}, center=(${pred.x}, ${pred.y}), size=(${pred.width}x${pred.height}), box=[${pred.left}, ${pred.top}, ${pred.right}, ${pred.bottom}]"
+                )
+            }
+            for (pred in finalPredictions) {
+                Log.i(
+                    TAG,
+                    "FINAL_DETECTION class=${pred.clazz}, confidence=${pred.confidence}, center=(${pred.x}, ${pred.y}), size=(${pred.width}x${pred.height}), box=[${pred.left}, ${pred.top}, ${pred.right}, ${pred.bottom}]"
+                )
+            }
 
             Result.Ok(
                 finalPredictions,
@@ -233,6 +272,22 @@ class TFLiteDetector(
             Result.Error(
                 "Inference error: ${e.message}"
             )
+        }
+    }
+
+    private fun saveDebugInput(bmp: Bitmap) {
+        try {
+            val dir = File(appContext.cacheDir, "tflite_debug")
+            if (!dir.exists()) dir.mkdirs()
+
+            val out = File(dir, "android_input_640.png")
+            FileOutputStream(out).use { stream ->
+                bmp.compress(Bitmap.CompressFormat.PNG, 100, stream)
+            }
+
+            Log.i(TAG, "Saved debug 640x640 input tensor bitmap at ${out.absolutePath}")
+        } catch (e: Exception) {
+            Log.w(TAG, "Unable to save debug 640x640 input tensor bitmap", e)
         }
     }
 
