@@ -99,7 +99,7 @@ class Detection {
         );
 
   factory Detection.fromJson(Map<String, dynamic> json) {
-    final rawClass = json['class'];
+    final rawClass = json['class'] ?? json['className'];
     if (rawClass != null && rawClass is! String) {
       throw const FormatException('Detection "class" must be a string');
     }
@@ -107,8 +107,10 @@ class Detection {
     final width = _requiredFiniteNumber(json, 'width');
     final height = _requiredFiniteNumber(json, 'height');
     final confidence = _optionalFiniteNumber(json, 'confidence') ?? 0;
-    final widthCm = _optionalFiniteNumber(json, 'width_cm');
-    final heightCm = _optionalFiniteNumber(json, 'height_cm');
+    final widthCm = _optionalFiniteNumber(json, 'width_cm') ??
+        _optionalFiniteNumber(json, 'widthCm');
+    final heightCm = _optionalFiniteNumber(json, 'height_cm') ??
+        _optionalFiniteNumber(json, 'heightCm');
     if (width < 0 || height < 0) {
       throw const FormatException('Detection dimensions cannot be negative');
     }

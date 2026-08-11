@@ -93,11 +93,17 @@ class AnalysisResult {
     if (rawCardDetected != null && rawCardDetected is! bool) {
       throw const FormatException('"card_detected" must be a boolean');
     }
+
+    final hasInlineMeasurement = detections.any(
+      (d) => d.widthCm != null || d.heightCm != null,
+    );
     final scaleSource = rawScaleSource != null
-        ? ScaleSource.fromWire(rawScaleSource as String)
+        ? (rawScaleSource as String) == 'none' && hasInlineMeasurement
+            ? ScaleSource.boxFace
+            : ScaleSource.fromWire(rawScaleSource as String)
         : (rawCardDetected as bool? ?? false)
         ? ScaleSource.boxFace
-        : ScaleSource.none;
+        : (hasInlineMeasurement ? ScaleSource.boxFace : ScaleSource.none);
 
     // `none` means there is no defensible pixel-to-cm conversion. Discard
     // stale/contradictory measurement fields so they cannot silently drive
