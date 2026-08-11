@@ -4,6 +4,10 @@ data/**
 !data/raw/
 !data/raw/*/
 !data/raw/*/.gitkeep
+!data/scraped_raw/
+!data/scraped_raw/.gitkeep
+!data/scraped_filtered/
+!data/scraped_filtered/.gitkeep
 
 # Python
 __pycache__/
@@ -11,9 +15,21 @@ __pycache__/
 *.pyo
 .venv/
 
+# Debug output (regenerated every run)
+debug/
+
 # Environment
+.venv-export/
 .env
 
 # OS / Editor
 .DS_Store
 .vscode/
+
+# Phase D - edge conversion
+export/models/*.onnx
+.venv-export/
+
+weights.pt
+requirements_backup.txt
+.env.example
