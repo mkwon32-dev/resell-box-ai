@@ -33,13 +33,15 @@ The system has three main parts:
    - Detects damage location with bounding boxes.
    - Classifies each detected damage as `scratch`, `dent`, or `tear`.
 
-2. **OpenCV Box-Face Measurement**
-   - No reference object needed: the box itself is the scale reference.
-   - OpenCV finds the box silhouette, splits it into visible face panels,
-     and rectifies the damaged panel to fronto-parallel with a homography
-     (this makes the measurement robust to weird camera angles).
-   - Damage is measured as a fraction of the panel, then converted to cm
-     using a nominal sneaker-box length (33–37 cm; we assume 35 cm).
+2. **OpenCV Damage Measurement**
+   - If a reference card (8.56 × 5.398 cm) is in frame it is auto-detected
+     and used for the most accurate px→cm scale.
+   - Otherwise no reference object is needed: the box itself is the scale
+     reference. OpenCV finds the box silhouette, splits it into visible face
+     panels, and rectifies the damaged panel to fronto-parallel with a
+     homography (this makes the measurement robust to weird camera angles).
+   - Card-free damage is measured as a fraction of the panel, then converted
+     to cm using a nominal sneaker-box length (33–37 cm; we assume 35 cm).
    - The app reports estimated damage dimensions and detected count.
 
 3. **Rule-Based Risk Scoring**
@@ -79,33 +81,38 @@ Labeling rules:
 - Do not label `risk_label` in Roboflow.
 - Risk is calculated later using OpenCV measurements and rules.
 
-## Size Estimation (card-free)
+## Size Estimation
 
-The box itself is the scale reference — the user only has to keep the whole
-box in frame. No card, coin, or ruler.
+A reference card in frame gives the best scale; without one, the box itself
+is the scale reference — the user only has to keep the whole box in frame.
 
 User instruction:
 
 ```text
-Keep the whole box in frame when taking the photo.
+Keep the whole box in frame. Optionally lay a credit-card-sized card
+(8.56 × 5.398 cm) flat next to the damage for the most accurate sizing.
 ```
 
-Measurement ladder (`sneaker-box-dataset/measurement/measure_box_face.py`),
-from most to least accurate:
+Measurement ladder (on-device: `DamageMeasurement.kt` + `BoxFaceMeasurement.kt`;
+Python prototype of the card-free tiers:
+`sneaker-box-dataset/measurement/measure_box_face.py`), from most to least
+accurate — the card is auto-detected, no user toggle:
 
 | Scene | Method | `scale_source` | Verdict behavior |
 |---|---|---|---|
+| Reference card found | card quad → homography → px/cm from known card dims | `card` | full cm rules |
 | Box face found | face quad → homography → panel-relative → cm | `box_face` | full cm rules |
 | Silhouette only | coarse scale: silhouette long edge = 35 cm | `box_edge` | full cm rules (coarse) |
 | Close-up, no box edges | no size emitted | `none` | Caution floor |
 
-Why this beats the card: a reference card only gives a valid px→cm ratio when
-it is coplanar with the damage and the shot is fronto-parallel. When the face
-quad is correct, the homography rectifies the damaged panel itself so oblique
-angles are corrected. Classical face detection and assignment are still the
-dominant error source: the current synthetic benchmark has 37% median
-cross-face scale spread. Treat cm values as roughly ±30% estimates; the
-33–37 cm box-length prior adds about ±6%. Estimates are marked with `~`.
+The card tier wins when present because the card's dimensions are exactly
+known, while the box tiers lean on a 33–37 cm length prior (about ±6% alone).
+A card is only trustworthy when it is coplanar with the damage and detected
+with high quality — low-quality card detections fall through to the box-face
+tiers rather than poisoning the scale. For the card-free tiers, classical
+face detection and assignment are the dominant error source: the current
+synthetic benchmark has 37% median cross-face scale spread. Treat card-free
+cm values as roughly ±30% estimates. Estimates are marked with `~`.
 
 The cm thresholds below are equivalent to panel-relative fractions (at the
 35 cm nominal): tear ≥ 9 cm ⇔ ≥ 0.26 of the panel's long dimension;

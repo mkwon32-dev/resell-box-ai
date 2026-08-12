@@ -18,7 +18,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private var detector: TFLiteDetector? = null
-    private val damageMeasurement = DamageMeasurement()
+    private val damageMeasurement by lazy { DamageMeasurement(applicationContext) }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -87,61 +87,53 @@ class MainActivity : FlutterActivity() {
 
                 is TFLiteDetector.Result.Ok -> {
                     val predictions = detectionResult.predictions
-                    val measurementResult = damageMeasurement.measure(
-                        bitmap,
-                        predictions
-                    )
-
-                    val measurementList = if (measurementResult is com.resellbox.ai.data.MeasurementResult.Success) {
-                        measurementResult.measurements
-                    } else {
-                        emptyList()
-                    }
-                    Log.i("MainActivity", "Measurement handoff: predictionCount=${predictions.size} measurementCount=${measurementList.size} resultType=${measurementResult::class.java.simpleName}")
+                    val outcome = damageMeasurement.measure(bitmap, predictions)
+                    Log.i("MainActivity", "Measurement handoff: predictionCount=${predictions.size} scaleSource=${outcome.scaleSource}")
 
                     val predictionMaps = predictions.mapIndexed { index, prediction ->
-                        val measured = measurementList.getOrNull(index)
+                        val measured = outcome.measurements.getOrNull(index)
                         val widthCm = measured?.widthCm?.toDouble()
                         val heightCm = measured?.heightCm?.toDouble()
-                        val longestSideCm = measured?.longestSideCm?.toDouble()
-                        Log.i("MainActivity", "Measurement pass-through: index=$index class=${prediction.clazz} widthCm=$widthCm heightCm=$heightCm longestSideCm=$longestSideCm")
-                        mapOf(
+                        Log.i("MainActivity", "Measurement pass-through: index=$index class=${prediction.clazz} widthCm=$widthCm heightCm=$heightCm")
+                        val map = mutableMapOf<String, Any?>(
                             "x" to prediction.x.toDouble(),
                             "y" to prediction.y.toDouble(),
                             "width" to prediction.width.toDouble(),
                             "height" to prediction.height.toDouble(),
                             "class" to prediction.clazz,
                             "confidence" to prediction.confidence.toDouble(),
-                            "widthCm" to widthCm,
-                            "heightCm" to heightCm,
-                            "longestSideCm" to longestSideCm,
                             "width_cm" to widthCm,
-                            "height_cm" to heightCm,
-                            "longest_side_cm" to longestSideCm
+                            "height_cm" to heightCm
                         )
+                        outcome.fallback?.measurements?.getOrNull(index)?.let { alt ->
+                            map["fallback_width_cm"] = alt.widthCm?.toDouble()
+                            map["fallback_height_cm"] = alt.heightCm?.toDouble()
+                        }
+                        map
                     }
 
-                    val measurementPayload = measurementPayload(measurementResult)
-
-                    val verdict = if (predictionMaps.isEmpty()) {
-                        "low"
-                    } else {
-                        "caution"
-                    }
-
-                    result.success(
-                        mapOf(
-                            "image" to mapOf(
-                                "width" to detectionResult.image.width,
-                                "height" to detectionResult.image.height
-                            ),
-                            "predictions" to predictionMaps,
-                            "verdict" to verdict,
-                            "scale_source" to "none",
-                            "accelerator" to currentDetector.acceleratorName,
-                            "measurement" to measurementPayload
-                        )
+                    // No verdict here: the Flutter side owns the risk rules and
+                    // computes the verdict from classes + cm when it is absent.
+                    val payload = mutableMapOf<String, Any?>(
+                        "image" to mapOf(
+                            "width" to detectionResult.image.width,
+                            "height" to detectionResult.image.height
+                        ),
+                        "predictions" to predictionMaps,
+                        "scale_source" to outcome.scaleSource,
+                        "accelerator" to currentDetector.acceleratorName
                     )
+                    // Detected card is a proposal: the UI draws the outline and
+                    // asks the user; on rejection it swaps in the fallback cms.
+                    if (outcome.scaleSource == "card" && outcome.cardCalibration != null) {
+                        payload["card"] = mapOf(
+                            "corners" to outcome.cardCalibration.corners.map {
+                                mapOf("x" to it.x, "y" to it.y)
+                            },
+                            "fallback_scale_source" to (outcome.fallback?.scaleSource ?: "none")
+                        )
+                    }
+                    result.success(payload)
                 }
 
                 is TFLiteDetector.Result.Error -> {
@@ -172,82 +164,6 @@ class MainActivity : FlutterActivity() {
             )
         }
         return detector
-    }
-
-    private fun measurementPayload(measurementResult: com.resellbox.ai.data.MeasurementResult): Map<String, Any?> {
-        return when (measurementResult) {
-            is com.resellbox.ai.data.MeasurementResult.Success -> {
-                mapOf(
-                    "found" to true,
-                    "damageCount" to measurementResult.damageCount,
-                    "calibration" to mapOf(
-                        "found" to true,
-                        "corners" to measurementResult.calibration.corners.map { point ->
-                            mapOf(
-                                "x" to point.x,
-                                "y" to point.y
-                            )
-                        },
-                        "cardWidthPixels" to measurementResult.calibration.cardWidthPixels,
-                        "cardHeightPixels" to measurementResult.calibration.cardHeightPixels,
-                        "pixelsPerCmX" to measurementResult.calibration.pixelsPerCmX,
-                        "pixelsPerCmY" to measurementResult.calibration.pixelsPerCmY,
-                        "quality" to measurementResult.calibration.quality,
-                        "score" to measurementResult.calibration.score,
-                        "perspectiveCorrected" to measurementResult.calibration.perspectiveCorrected,
-                        "warnings" to measurementResult.calibration.warnings
-                    ),
-                    "measurements" to measurementResult.measurements.map { damage ->
-                        mapOf(
-                            "class" to damage.clazz,
-                            "className" to damage.className,
-                            "confidence" to damage.confidence,
-                            "x" to damage.x,
-                            "y" to damage.y,
-                            "widthPixels" to damage.widthPixels,
-                            "heightPixels" to damage.heightPixels,
-                            "widthCm" to damage.widthCm,
-                            "heightCm" to damage.heightCm,
-                            "longestSideCm" to damage.longestSideCm,
-                            "width_cm" to damage.widthCm,
-                            "height_cm" to damage.heightCm,
-                            "longest_side_cm" to damage.longestSideCm
-                        )
-                    }
-                )
-            }
-
-            is com.resellbox.ai.data.MeasurementResult.CardNotFound -> {
-                mapOf(
-                    "found" to false,
-                    "message" to measurementResult.message,
-                    "candidates" to measurementResult.candidates,
-                    "damageCount" to 0
-                )
-            }
-
-            is com.resellbox.ai.data.MeasurementResult.LowCalibrationQuality -> {
-                mapOf(
-                    "found" to true,
-                    "qualityWarning" to measurementResult.message,
-                    "pixelsPerCmX" to measurementResult.calibration.pixelsPerCmX,
-                    "pixelsPerCmY" to measurementResult.calibration.pixelsPerCmY,
-                    "calibration" to mapOf(
-                        "found" to true,
-                        "quality" to measurementResult.calibration.quality,
-                        "score" to measurementResult.calibration.score,
-                        "cardWidthPixels" to measurementResult.calibration.cardWidthPixels,
-                        "cardHeightPixels" to measurementResult.calibration.cardHeightPixels,
-                        "corners" to measurementResult.calibration.corners.map { point ->
-                            mapOf(
-                                "x" to point.x,
-                                "y" to point.y
-                            )
-                        }
-                    )
-                )
-            }
-        }
     }
 
     private fun decodeBitmapWithExif(imagePath: String): Bitmap? {

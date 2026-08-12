@@ -39,7 +39,27 @@ import kotlin.math.roundToInt
  * estimate a pixel-to-cm calibration, and then convert each YOLO bbox in the
  * original image to cm using that calibration.
  */
-class DamageMeasurement {
+class DamageMeasurement(private val context: android.content.Context) {
+
+    /**
+     * Best-effort debug-image write to the app-private pictures dir
+     * (Android/data/<pkg>/files/Pictures/resellbox_debug — needs no
+     * permission on any Android version). Debug output must never fail an
+     * analysis: the public Pictures dir is blocked by scoped storage and
+     * throws EACCES in release builds.
+     */
+    private fun writeDebugBitmap(bitmap: Bitmap, fileName: String): String? = runCatching {
+        val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "resellbox_debug")
+        dir.mkdirs()
+        val outputFile = File(dir, fileName)
+        FileOutputStream(outputFile).use { stream ->
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+        }
+        outputFile.absolutePath
+    }.getOrElse {
+        Log.w(TAG, "Debug image write failed: ${it.message}")
+        null
+    }
 
     companion object {
         private const val TAG = "DamageMeasurement"
@@ -52,13 +72,32 @@ class DamageMeasurement {
 
         const val MIN_CARD_AREA_RATIO = 0.003f
         const val MAX_CARD_AREA_RATIO = 0.35f
-        const val MIN_ASPECT_RATIO = 1.25f
-        const val MAX_ASPECT_RATIO = 2.35f
+
+        // Wide, perspective-tolerant band: a card lying on a tilted box face
+        // is foreshortened, so its apparent aspect can drift far from the
+        // true 1.586 (the homography corrects the tilt when measuring).
+        const val MIN_ASPECT_RATIO = 1.2f
+        const val MAX_ASPECT_RATIO = 2.6f
 
         private const val ASPECT_SCORE_TOLERANCE = 0.18f
-        private const val MIN_FALLBACK_RECTANGULARITY = 0.72f
-        private const val MIN_FALLBACK_SOLIDITY = 0.88f
-        private const val MIN_FALLBACK_ASPECT_ERROR = 0.16f
+
+        // Acceptance gates lean on crispness rather than exact aspect: real
+        // cards segment as clean convex 4-corner quads (rectangularity and
+        // solidity near 1), while box art, tape and damage blobs do not. The
+        // residual false positives (mostly card-shaped shoe-size labels) are
+        // caught by the box-prior cross-check and the user confirmation step.
+        private const val MIN_CARD_RECTANGULARITY = 0.85
+        private const val MIN_CARD_SOLIDITY = 0.92
+        private const val MIN_ACCEPT_SCORE = 0.60f
+
+        // Hough-line quads are weaker evidence than contour quads, so they
+        // stay pinned near the true card ratio.
+        private const val MAX_LINE_QUAD_ASPECT_ERROR = 0.10
+
+        // Cross-check: the card scale must imply a plausible sneaker-box size
+        // when the box silhouette is also visible (real boxes are 33-37 cm).
+        private const val IMPLIED_BOX_MIN_CM = 15.0
+        private const val IMPLIED_BOX_MAX_CM = 60.0
     }
 
     init {
@@ -69,50 +108,59 @@ class DamageMeasurement {
         }
     }
 
+    private val boxFace = BoxFaceMeasurement()
+
+    /**
+     * Degradation ladder: a detected reference card is the best scale (exact
+     * known dimensions); without one, fall back to the card-free box-face
+     * pipeline (nominal box length), then its coarse box_edge tier, then none.
+     */
     fun measure(
         bitmap: Bitmap,
         predictions: List<Prediction>
-    ): MeasurementResult {
+    ): MeasurementOutcome {
         val calibration = detectReferenceCard(bitmap)
-        Log.i(TAG, "Measurement pipeline: predictionCount=${predictions.size} calibrationAccepted=${calibration is CalibrationResult.Success} calibrationRejected=${calibration is CalibrationResult.CardNotFound || calibration is CalibrationResult.LowCalibrationQuality}")
 
         return when (calibration) {
             is CalibrationResult.Success -> {
+                // Box-prior cross-check: with the card's px/cm, the visible box
+                // silhouette must come out sneaker-box sized. A "card" that
+                // implies an 8 cm or a 3 m box is a mis-detected rectangle
+                // (box face, label) -- fall back to card-free measurement.
+                val silhouetteLongPx = boxFace.silhouetteLongEdgeOriginalPx(bitmap)
+                val impliedBoxCm = silhouetteLongPx?.let { it / calibration.pixelsPerCmLong }
+                if (impliedBoxCm != null &&
+                    (impliedBoxCm < IMPLIED_BOX_MIN_CM || impliedBoxCm > IMPLIED_BOX_MAX_CM)
+                ) {
+                    Log.w(TAG, "Card rejected by box-prior cross-check: impliedBoxCm=$impliedBoxCm (allowed $IMPLIED_BOX_MIN_CM..$IMPLIED_BOX_MAX_CM)")
+                    val fallback = boxFace.measure(bitmap, predictions)
+                    return MeasurementOutcome(fallback.scaleSource, fallback.measurements, null)
+                }
+
                 val homography = buildHomography(calibration.corners)
                 val measurements = predictions.mapIndexed { index, prediction ->
                     val measurement = estimateDamageSize(prediction, calibration, homography)
-                    Log.i(TAG, "Measurement per prediction: index=$index generated=true class=${measurement.className} widthCm=${measurement.widthCm} heightCm=${measurement.heightCm} longestSideCm=${measurement.longestSideCm}")
+                    Log.i(TAG, "Measurement per prediction: index=$index class=${measurement.className} widthCm=${measurement.widthCm} heightCm=${measurement.heightCm} longestSideCm=${measurement.longestSideCm}")
                     measurement
                 }
-                Log.i(TAG, "Measurement pipeline: calibrationSuccess measurementCount=${measurements.size}")
-
-                MeasurementResult.Success(
-                    originalImageWidth = bitmap.width,
-                    originalImageHeight = bitmap.height,
-                    calibration = calibration,
-                    measurements = measurements,
-                    damageCount = measurements.size
-                )
+                // The card still needs user confirmation in the UI, so also
+                // compute the card-free measurements the app should fall back
+                // to if the user rejects the detected card.
+                val fallback = if (predictions.isEmpty()) null else boxFace.measure(bitmap, predictions)
+                Log.i(TAG, "Measurement pipeline: scale_source=card measurementCount=${measurements.size} fallback=${fallback?.scaleSource}")
+                MeasurementOutcome("card", measurements, calibration, fallback)
             }
 
-            is CalibrationResult.CardNotFound -> {
-                Log.i(TAG, "Measurement pipeline: calibrationRejected reason=CardNotFound message=${calibration.message}")
-                MeasurementResult.CardNotFound(
-                    originalImageWidth = bitmap.width,
-                    originalImageHeight = bitmap.height,
-                    message = calibration.message,
-                    candidates = calibration.candidates
-                )
-            }
-
+            is CalibrationResult.CardNotFound,
             is CalibrationResult.LowCalibrationQuality -> {
-                Log.i(TAG, "Measurement pipeline: calibrationRejected reason=LowCalibrationQuality quality=${calibration.calibration.quality} scaleDiffPercent=${calibration.calibration.quality} message=${calibration.message}")
-                MeasurementResult.LowCalibrationQuality(
-                    originalImageWidth = bitmap.width,
-                    originalImageHeight = bitmap.height,
-                    message = calibration.message,
-                    calibration = calibration.calibration
-                )
+                val reason = if (calibration is CalibrationResult.CardNotFound) {
+                    "CardNotFound(${calibration.message})"
+                } else {
+                    "LowCalibrationQuality"
+                }
+                val fallback = boxFace.measure(bitmap, predictions)
+                Log.i(TAG, "Measurement pipeline: card unusable ($reason), box-face fallback scale_source=${fallback.scaleSource}")
+                MeasurementOutcome(fallback.scaleSource, fallback.measurements, null)
             }
         }
     }
@@ -248,6 +296,16 @@ class DamageMeasurement {
         )
         candidateLogCount = lineCandidates.logCount
 
+        val satCandidates = evaluateCandidateContours(
+            contours = satMaskContours(src, width, height),
+            sourcePrefix = "SAT",
+            width = width,
+            height = height,
+            imageArea = imageArea,
+            candidateLogCount = candidateLogCount
+        )
+        candidateLogCount = satCandidates.logCount
+
         Log.i(
             TAG,
             "Calibration candidate generation by source: edgeAccepted=${edgeCandidates.accepted.size} edgeEvaluated=${edgeCandidates.evaluated.size} regionAccepted=${regionCandidates.accepted.size} regionEvaluated=${regionCandidates.evaluated.size} lineAccepted=${lineCandidates.accepted.size} lineEvaluated=${lineCandidates.evaluated.size}"
@@ -256,12 +314,15 @@ class DamageMeasurement {
         val candidateResults = edgeCandidates.accepted.toMutableList()
         candidateResults.addAll(regionCandidates.accepted)
         candidateResults.addAll(lineCandidates.accepted)
+        candidateResults.addAll(satCandidates.accepted)
         val evaluatedCandidates = edgeCandidates.evaluated.toMutableList()
         evaluatedCandidates.addAll(regionCandidates.evaluated)
         evaluatedCandidates.addAll(lineCandidates.evaluated)
+        evaluatedCandidates.addAll(satCandidates.evaluated)
         val rejectedNearMisses = edgeCandidates.rejected.toMutableList()
         rejectedNearMisses.addAll(regionCandidates.rejected)
         rejectedNearMisses.addAll(lineCandidates.rejected)
+        rejectedNearMisses.addAll(satCandidates.rejected)
 
         val mergedAccepted = deduplicateCandidates(candidateResults)
         val mergedEvaluated = deduplicateCandidates(evaluatedCandidates)
@@ -356,7 +417,11 @@ class DamageMeasurement {
         Log.i(TAG, "Calibration dimension summary: measuredSideA=$measuredSideA measuredSideB=$measuredSideB longSidePixels=$longSidePixels shortSidePixels=$shortSidePixels orientationAngle=$orientationAngleDegrees resultingScales=pxPerCmLong=$pxPerCmLong pxPerCmShort=$pxPerCmShort")
         Log.i(TAG, "Calibration selected: score=${best.score}, areaRatio=${best.areaRatio}, aspectRatio=${best.aspect}, rectangularity=${best.rectangularity}, convexity=${best.convexity}, approxPolygonPointCount=${best.approxPointCount}, source=${best.source}, corners=${corner.map { "${it.x},${it.y}" }}, cardWidthPixels=$longSidePixelsF, cardHeightPixels=$shortSidePixelsF, pixelsPerCmX=$pxPerCmLong, pixelsPerCmY=$pxPerCmShort, scaleDiff=$scaleDiff, scaleDiffPercent=$scaleDiffPercent, quality=$calibrationQuality, canonicalWidthPx=$canonicalWidthPx, canonicalHeightPx=$canonicalHeightPx, homographyCreated=$homographySuccess, selectedCardDebugPath=$debugImagePath, cardCandidatesDebugPath=$finalCandidateDebugImagePath, selectedCardWarpedPath=$warpedImagePath")
 
-        if (!homographySuccess || calibrationQuality < 0.15f || longSidePixels < 20.0 || shortSidePixels < 10.0) {
+        // No scaleDiff-based quality gate: pxPerCmLong/Short necessarily
+        // disagree for a tilted card, and the homography measurement path
+        // corrects tilt anyway. Bad quads are filtered by crispness gates,
+        // the box-prior cross-check, and finally user confirmation.
+        if (!homographySuccess || longSidePixels < 20.0 || shortSidePixels < 10.0) {
             return CalibrationResult.LowCalibrationQuality(
                 message = "Reference card calibration quality is below threshold",
                 calibration = CalibrationResult.Success(
@@ -598,29 +663,22 @@ class DamageMeasurement {
             val approxPointCount = points.size
             val quadCandidate = approxPointCount == 4
             val candidateAspectError = abs(aspect - CARD_ASPECT_RATIO.toDouble()) / CARD_ASPECT_RATIO.toDouble()
-            val basicGeometryPlausible = areaRatio > 0.0 &&
-                aspect > 0.0 &&
-                longSide > 20.0 &&
-                shortSide > 10.0 &&
-                candidateAspectError <= 0.30
-            val strongFallbackGeometry = rectangularity >= MIN_FALLBACK_RECTANGULARITY.toDouble() &&
-                solidity >= MIN_FALLBACK_SOLIDITY.toDouble() &&
-                candidateAspectError <= MIN_FALLBACK_ASPECT_ERROR.toDouble()
-            val nearMissFallbackGeometry = rectangularity >= 0.64 &&
-                solidity >= 0.78 &&
-                candidateAspectError <= 0.24
-            val fallbackCandidate = !quadCandidate &&
-                basicGeometryPlausible &&
-                (strongFallbackGeometry || nearMissFallbackGeometry)
 
-            if (!quadCandidate && !fallbackCandidate) {
+            // Only crisp convex 4-corner quads may calibrate; blob and
+            // minAreaRect fallbacks matched box faces and labels far too
+            // often.
+            val acceptable = quadCandidate &&
+                rectangularity >= MIN_CARD_RECTANGULARITY &&
+                solidity >= MIN_CARD_SOLIDITY &&
+                longSide > 20.0 &&
+                shortSide > 10.0
+
+            if (!acceptable) {
                 val rejectionReason = when {
-                    !basicGeometryPlausible -> "basic geometry not plausible"
-                    approxPointCount > 4 && candidateAspectError > MIN_FALLBACK_ASPECT_ERROR.toDouble() -> "aspect mismatch"
-                    rectangularity < 0.64 -> "rectangularity below near-miss threshold"
-                    solidity < 0.78 -> "solidity below near-miss threshold"
-                    longSide <= 20.0 || shortSide <= 10.0 -> "minAreaRect dimensions too small"
-                    else -> "fallback geometry not strong enough"
+                    !quadCandidate -> "not a 4-corner quad"
+                    rectangularity < MIN_CARD_RECTANGULARITY -> "rectangularity below threshold"
+                    solidity < MIN_CARD_SOLIDITY -> "solidity below threshold"
+                    else -> "minAreaRect dimensions too small"
                 }
                 rejected.add(
                     RejectedCandidate(
@@ -662,8 +720,6 @@ class DamageMeasurement {
             val rectangularityScore = clamp(rectangularity.toFloat(), 0.0f, 1.0f).toDouble()
             val areaScore = clamp((areaRatio / 0.04).toFloat(), 0.0f, 1.0f).toDouble()
             val solidityScore = clamp(solidity.toFloat(), 0.0f, 1.0f).toDouble()
-            val quadBonus = if (quadCandidate) 0.22f else 0.0f
-            val fallbackPenalty = if (quadCandidate) 0.0f else -0.12f
 
             val scoreRaw = (
                 aspectScore * 0.42f +
@@ -671,21 +727,15 @@ class DamageMeasurement {
                     areaScore * 0.16 +
                     sizeQuality * 0.08 +
                     solidityScore * 0.12 +
-                    quadBonus +
-                    fallbackPenalty
+                    0.22f
                 )
             val score = scoreRaw.toFloat()
 
-            val orderedPoints = if (quadCandidate) {
-                orderPoints(points)
-            } else {
-                val backup = arrayOf(Point(), Point(), Point(), Point())
-                box.points(backup)
-                orderPoints(backup)
-            }
+            val orderedPoints = orderPoints(points)
 
-            val regionBorderPadding = if (sourcePrefix == "REGION") max(24, min(width, height) / 40) else 0
-            if (sourcePrefix == "REGION" && isNearImageBorder(orderedPoints, width, height, regionBorderPadding)) {
+            val borderSensitive = sourcePrefix == "REGION" || sourcePrefix == "SAT"
+            val regionBorderPadding = if (borderSensitive) max(24, min(width, height) / 40) else 0
+            if (borderSensitive && isNearImageBorder(orderedPoints, width, height, regionBorderPadding)) {
                 rejected.add(
                     RejectedCandidate(
                         areaRatio = areaRatio.toFloat(),
@@ -716,18 +766,18 @@ class DamageMeasurement {
                 points = orderedPoints,
                 widthPixels = longSide.toFloat(),
                 heightPixels = shortSide.toFloat(),
-                source = if (quadCandidate) "${sourcePrefix}_QUAD" else "${sourcePrefix}_MIN_AREA_RECT_FALLBACK",
+                source = "${sourcePrefix}_QUAD",
                 approxPointCount = approxPointCount
             )
 
             evaluated.add(candidate)
 
-            if (score > 0.40f) {
+            if (score > MIN_ACCEPT_SCORE) {
                 accepted.add(candidate)
             } else {
                 if (areaRatio >= 0.005 && logCount < 30) {
                     logCount++
-                    Log.w(TAG, "Reject contour: areaRatio=$areaRatio low score=$score below 0.40 source=$sourcePrefix")
+                    Log.w(TAG, "Reject contour: areaRatio=$areaRatio low score=$score below $MIN_ACCEPT_SCORE source=$sourcePrefix")
                 }
             }
         }
@@ -738,6 +788,72 @@ class DamageMeasurement {
             rejected = rejected,
             logCount = logCount
         )
+    }
+
+    /**
+     * Low-saturation bright regions — a whitish card on a colored box face.
+     * Separates card from lid by color where grayscale luminance cannot
+     * (dark scenes, red/blue lids). Runs at a normalized resolution so the
+     * morphology kernel sizes mean the same thing on every camera; contours
+     * are scaled back to original pixels. Two variants:
+     *   gentle  open9 + close9 — card clear of any white print
+     *   split   close25 then open41 — card touching thin white print; the
+     *           close solidifies the card over its own stripe/text, the big
+     *           open cuts thin letter-stroke bridges to the box logo.
+     */
+    private fun satMaskContours(rgba: Mat, width: Int, height: Int): List<MatOfPoint> {
+        val satScale = min(1.0, 1600.0 / max(width, height))
+        val work = if (satScale < 1.0) {
+            val resized = Mat()
+            Imgproc.resize(
+                rgba, resized,
+                Size(width * satScale, height * satScale),
+                0.0, 0.0, Imgproc.INTER_AREA
+            )
+            resized
+        } else {
+            rgba
+        }
+        val rgb = Mat()
+        Imgproc.cvtColor(work, rgb, Imgproc.COLOR_RGBA2RGB)
+        val hsv = Mat()
+        Imgproc.cvtColor(rgb, hsv, Imgproc.COLOR_RGB2HSV)
+        val mask = Mat()
+        Core.inRange(hsv, Scalar(0.0, 0.0, 101.0), Scalar(180.0, 79.0, 255.0), mask)
+
+        val k9 = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(9.0, 9.0))
+        val gentle = Mat()
+        Imgproc.morphologyEx(mask, gentle, Imgproc.MORPH_OPEN, k9)
+        Imgproc.morphologyEx(gentle, gentle, Imgproc.MORPH_CLOSE, k9)
+
+        val k25 = Imgproc.getStructuringElement(Imgproc.MORPH_ELLIPSE, Size(25.0, 25.0))
+        val k41 = Imgproc.getStructuringElement(Imgproc.MORPH_ELLIPSE, Size(41.0, 41.0))
+        val split = Mat()
+        Imgproc.morphologyEx(mask, split, Imgproc.MORPH_CLOSE, k25)
+        Imgproc.morphologyEx(split, split, Imgproc.MORPH_OPEN, k41)
+
+        val out = mutableListOf<MatOfPoint>()
+        for (variant in listOf(gentle, split)) {
+            val contours = mutableListOf<MatOfPoint>()
+            Imgproc.findContours(
+                variant, contours, Mat(),
+                Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE
+            )
+            for (contour in contours) {
+                out.add(
+                    if (satScale < 1.0) {
+                        MatOfPoint(
+                            *contour.toArray().map {
+                                Point(it.x / satScale, it.y / satScale)
+                            }.toTypedArray()
+                        )
+                    } else {
+                        contour
+                    }
+                )
+            }
+        }
+        return out
     }
 
     private fun buildRegionMask(gray: Mat): Mat {
@@ -860,7 +976,7 @@ class DamageMeasurement {
 
                                 val aspect = longSide / shortSide
                                 val aspectError = abs(aspect - CARD_ASPECT_RATIO.toDouble()) / CARD_ASPECT_RATIO.toDouble()
-                                if (aspectError > 0.25) {
+                                if (aspectError > MAX_LINE_QUAD_ASPECT_ERROR) {
                                     rejectedAspect += 1
                                     continue
                                 }
@@ -1011,7 +1127,7 @@ class DamageMeasurement {
                 approxPointCount = 4
             )
             evaluated.add(candidate)
-            if (score > 0.40f) accepted.add(candidate)
+            if (score > MIN_ACCEPT_SCORE) accepted.add(candidate)
             lineDebugQuads.add(quad)
             if (areaRatio >= 0.005 && logCount < 30) {
                 logCount++
@@ -1064,13 +1180,7 @@ class DamageMeasurement {
             }
         }
 
-        val debugDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "resellbox_debug").apply { mkdirs() }
-        val outputFile = File(debugDir, "$fileName.png")
-        val outputStream = FileOutputStream(outputFile)
-        debugBitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
-        outputStream.flush()
-        outputStream.close()
-        return outputFile.absolutePath
+        return writeDebugBitmap(debugBitmap, "$fileName.png")
     }
 
     private fun isConvexQuad(points: List<Point>): Boolean {
@@ -1187,13 +1297,7 @@ class DamageMeasurement {
         mat.copyTo(output)
         val debugBitmap = Bitmap.createBitmap(output.cols(), output.rows(), Bitmap.Config.ARGB_8888)
         Utils.matToBitmap(output, debugBitmap)
-        val debugDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "resellbox_debug").apply { mkdirs() }
-        val outputFile = File(debugDir, fileName)
-        val outputStream = FileOutputStream(outputFile)
-        debugBitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
-        outputStream.flush()
-        outputStream.close()
-        return outputFile.absolutePath
+        return writeDebugBitmap(debugBitmap, fileName)
     }
 
     private fun nextDebugFileName(baseName: String): String {
@@ -1261,13 +1365,7 @@ class DamageMeasurement {
             canvas.drawText(info, 24f, 84f, textPaint)
         }
 
-        val debugDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "resellbox_debug").apply { mkdirs() }
-        val outputFile = File(debugDir, "selected_card_debug.png")
-        val outputStream = FileOutputStream(outputFile)
-        debugBitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
-        outputStream.flush()
-        outputStream.close()
-        return outputFile.absolutePath
+        return writeDebugBitmap(debugBitmap, "selected_card_debug.png")
     }
 
     private fun saveCardCandidatesDebugImage(
@@ -1361,13 +1459,7 @@ class DamageMeasurement {
             canvas.drawText(label, 24f, y, textPaint)
         }
 
-        val debugDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "resellbox_debug").apply { mkdirs() }
-        val outputFile = File(debugDir, fileName)
-        val outputStream = FileOutputStream(outputFile)
-        debugBitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
-        outputStream.flush()
-        outputStream.close()
-        return outputFile.absolutePath
+        return writeDebugBitmap(debugBitmap, fileName)
     }
 
     private fun saveWarpedCardDebugImage(bitmap: Bitmap, homography: Mat, widthPx: Int, heightPx: Int): String? {
@@ -1377,13 +1469,7 @@ class DamageMeasurement {
         Imgproc.warpPerspective(src, warped, homography, Size(widthPx.toDouble(), heightPx.toDouble()))
         val warpedBitmap = Bitmap.createBitmap(widthPx, heightPx, Bitmap.Config.ARGB_8888)
         Utils.matToBitmap(warped, warpedBitmap)
-        val debugDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES), "resellbox_debug").apply { mkdirs() }
-        val outputFile = File(debugDir, "selected_card_warped.png")
-        val outputStream = FileOutputStream(outputFile)
-        warpedBitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
-        outputStream.flush()
-        outputStream.close()
-        return outputFile.absolutePath
+        return writeDebugBitmap(warpedBitmap, "selected_card_warped.png")
     }
 
     private fun orderPoints(points: Array<Point>): List<Point> {
@@ -1452,32 +1538,19 @@ sealed class CalibrationResult {
 }
 
 /**
- * The top-level measurement result. The backend can return this to the Flutter
- * bridge but keep decoding-only detection untouched.
+ * Unified result of the measurement ladder. `measurements` is index-aligned
+ * with the input predictions; cm fields are null for predictions the chosen
+ * tier could not size. `cardCalibration` is present only when scaleSource is
+ * "card".
  */
-sealed class MeasurementResult {
-    data class Success(
-        val originalImageWidth: Int,
-        val originalImageHeight: Int,
-        val calibration: CalibrationResult.Success,
-        val measurements: List<DamageSize>,
-        val damageCount: Int
-    ) : MeasurementResult()
-
-    data class CardNotFound(
-        val originalImageWidth: Int,
-        val originalImageHeight: Int,
-        val message: String,
-        val candidates: Int
-    ) : MeasurementResult()
-
-    data class LowCalibrationQuality(
-        val originalImageWidth: Int,
-        val originalImageHeight: Int,
-        val message: String,
-        val calibration: CalibrationResult.Success
-    ) : MeasurementResult()
-}
+data class MeasurementOutcome(
+    val scaleSource: String, // "card" | "box_face" | "box_edge" | "none"
+    val measurements: List<DamageSize>,
+    val cardCalibration: CalibrationResult.Success?,
+    /** Card-free alternative, present when scaleSource is "card" and there is
+     *  damage to size — used when the user rejects the detected card. */
+    val fallback: BoxFaceMeasurement.Outcome? = null
+)
 
 /**
  * Physical-size estimate for one YOLO prediction in the original image space.
