@@ -133,8 +133,11 @@ void main() {
 
     expect(tester.widget<Image>(find.byType(Image)).errorBuilder, isNotNull);
     expect(find.text('No box edges — sizes unavailable'), findsOneWidget);
-    expect(find.text('~2.5 × 1.5 cm'), findsNothing);
-    expect(find.text('—'), findsNWidgets(detections.length));
+    expect(find.text('Size: 2.5 × 1.5 cm'), findsNothing);
+    expect(
+      find.text('Measurement unavailable'),
+      findsNWidgets(detections.length),
+    );
     expect(find.byType(SingleChildScrollView), findsWidgets);
     expect(tester.takeException(), isNull);
   });
