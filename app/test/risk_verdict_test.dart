@@ -120,7 +120,7 @@ void main() {
           'predictions': <Object?>[],
           'card_detected': true,
         }).scaleSource,
-        ScaleSource.boxFace,
+        ScaleSource.card,
       );
       expect(
         AnalysisResult.fromJson({

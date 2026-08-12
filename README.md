@@ -33,13 +33,15 @@ The system has three main parts:
    - Detects damage location with bounding boxes.
    - Classifies each detected damage as `scratch`, `dent`, or `tear`.
 
-2. **OpenCV Box-Face Measurement**
-   - No reference object needed: the box itself is the scale reference.
-   - OpenCV finds the box silhouette, splits it into visible face panels,
-     and rectifies the damaged panel to fronto-parallel with a homography
-     (this makes the measurement robust to weird camera angles).
-   - Damage is measured as a fraction of the panel, then converted to cm
-     using a nominal sneaker-box length (33–37 cm; we assume 35 cm).
+2. **OpenCV Damage Measurement**
+   - If a reference card (8.56 × 5.398 cm) is in frame it is auto-detected
+     and used for the most accurate px→cm scale.
+   - Otherwise no reference object is needed: the box itself is the scale
+     reference. OpenCV finds the box silhouette, splits it into visible face
+     panels, and rectifies the damaged panel to fronto-parallel with a
+     homography (this makes the measurement robust to weird camera angles).
+   - Card-free damage is measured as a fraction of the panel, then converted
+     to cm using a nominal sneaker-box length (33–37 cm; we assume 35 cm).
    - The app reports estimated damage dimensions and detected count.
 
 3. **Rule-Based Risk Scoring**
@@ -79,39 +81,106 @@ Labeling rules:
 - Do not label `risk_label` in Roboflow.
 - Risk is calculated later using OpenCV measurements and rules.
 
-## Size Estimation (card-free)
+## Size Estimation
 
-The box itself is the scale reference — the user only has to keep the whole
-box in frame. No card, coin, or ruler.
+A reference card in frame gives the best scale; without one, the box itself
+is the scale reference — the user only has to keep the whole box in frame.
 
 User instruction:
 
 ```text
-Keep the whole box in frame when taking the photo.
+Keep the whole box in frame. Optionally lay a credit-card-sized card
+(8.56 × 5.398 cm) flat next to the damage for the most accurate sizing.
 ```
 
-Measurement ladder (`sneaker-box-dataset/measurement/measure_box_face.py`),
-from most to least accurate:
+Measurement ladder (on-device: `DamageMeasurement.kt` + `BoxFaceMeasurement.kt`;
+Python prototype of the card-free tiers:
+`sneaker-box-dataset/measurement/measure_box_face.py`), from most to least
+accurate — the card is auto-detected, no user toggle:
 
 | Scene | Method | `scale_source` | Verdict behavior |
 |---|---|---|---|
+| Reference card found | card quad → homography → px/cm from known card dims | `card` | full cm rules |
 | Box face found | face quad → homography → panel-relative → cm | `box_face` | full cm rules |
 | Silhouette only | coarse scale: silhouette long edge = 35 cm | `box_edge` | full cm rules (coarse) |
 | Close-up, no box edges | no size emitted | `none` | Caution floor |
 
-Why this beats the card: a reference card only gives a valid px→cm ratio when
-it is coplanar with the damage and the shot is fronto-parallel. When the face
-quad is correct, the homography rectifies the damaged panel itself so oblique
-angles are corrected. Classical face detection and assignment are still the
-dominant error source: the current synthetic benchmark has 37% median
-cross-face scale spread. Treat cm values as roughly ±30% estimates; the
-33–37 cm box-length prior adds about ±6%. Estimates are marked with `~`.
+The card tier wins when present because the card's dimensions are exactly
+known, while the box tiers lean on a 33–37 cm length prior (about ±6% alone).
+A card is only trustworthy when it is coplanar with the damage and detected
+with high quality — low-quality card detections fall through to the box-face
+tiers rather than poisoning the scale. For the card-free tiers, classical
+face detection and assignment are the dominant error source: the current
+synthetic benchmark has 37% median cross-face scale spread. Treat card-free
+cm values as roughly ±30% estimates. Estimates are marked with `~`.
 
 The cm thresholds below are equivalent to panel-relative fractions (at the
 35 cm nominal): tear ≥ 9 cm ⇔ ≥ 0.26 of the panel's long dimension;
 dent ≥ 12 / ≥ 4 cm ⇔ ≥ 0.34 / ≥ 0.11; scratch ≥ 10 cm ⇔ ≥ 0.29;
 surface damage ≥ 8 cm ⇔ ≥ 0.23. Unmeasured damage (`none`) is floored at
 `Caution` — it can never be cleared as `Low`.
+
+### How the measurement math works
+
+The photo contains no ruler, so every tier turns some object of *known
+real-world size* into a px→cm conversion, then applies it to the detector's
+damage bounding box. What differs per tier is which object supplies the
+scale and how perspective distortion is removed.
+
+**Card tier (`card`).** A credit-card-sized card has exactly known
+dimensions (ISO/IEC 7810 ID-1: 8.56 × 5.398 cm). Detection: several
+candidate generators (grayscale contours, Otsu regions, Hough-line quads,
+and a saturation mask that isolates a whitish card on a colored lid even in
+dim light) propose 4-corner quads, gated on *crispness* — near-perfect
+rectangularity and solidity — rather than exact aspect ratio, because a
+tilted card's apparent aspect drifts far from 1.586. The winning quad's four
+corners define a homography (a perspective transform) onto the card's true
+8.56 × 5.398 plane; the damage bbox is pushed through the same transform, so
+its size lands directly in card-plane centimeters with tilt corrected. Two
+safety nets follow: a *box-prior cross-check* (with the card's px/cm, the
+visible box silhouette must come out 15–60 cm long — a "card" that implies
+an 8 cm box is a mis-detected label or box face) and *user confirmation*
+(the app outlines the detected card and asks; rejecting it swaps in the
+card-free measurements computed in the same pass). On 299 dataset images
+with no card, the gates + cross-check leave ~6% phantom proposals — each
+costs one "No card" tap.
+
+**Box-face tier (`box_face`).** No card → the box itself is the ruler,
+via its nominal length (sneaker boxes run 33–37 cm; we assume 35).
+Steps:
+
+1. *Silhouette*: Canny edges → largest contour → convex hull (GrabCut
+   fallback, color-checked against the background so flat close-ups fail).
+2. *Face split*: a box seen at 3/4 angle projects to a hexagon. The interior
+   corner where the three visible faces meet is recovered by parallelogram
+   completion — each face is roughly a parallelogram in projection, so the
+   hidden junction satisfies `p = v[i-1] + v[i+1] - v[i]` for alternating
+   hull vertices. Three independent estimates of `p` must agree, which
+   structurally validates the split into top/front/side quads.
+3. *Face naming*: topmost centroid = top, largest remaining = front (long
+   edge = 35 cm box length each); third = side (long edge = 25 cm width).
+4. *Damage-to-face matching*: the damage bbox is intersected with each face
+   polygon; only the overlap polygon on the winning face is measured, so a
+   sliver of overlap cannot extrapolate off-panel and inflate the size.
+5. *Rectification + conversion*: homography maps the face quad to an upright
+   rectangle (undoing foreshortening), the overlap polygon is warped through
+   it, and `px_per_cm = rectified_long_side_px / 35` (25 for the side face)
+   converts its extent to cm.
+
+**Box-edge tier (`box_edge`).** Silhouette found but no clean face split:
+`minAreaRect` around the silhouette, its long edge is called 35 cm, and the
+raw bbox is divided by that ratio. No perspective correction — coarsest
+tier, gated to edge-sourced, box-shaped hulls only.
+
+**`none`.** No box outline (close-up): no defensible px→cm conversion
+exists, so no cm are emitted and risk floors at `Caution`.
+
+Error budget: the 33–37 cm prior alone is ±6%; face misassignment (side
+taken as front → 25 vs 35 mixup) and imperfect face splits dominate beyond
+that, hence the ±30% guidance for card-free values. The card tier avoids
+the prior entirely — its main failure mode is placement: a card lying on
+thick white print (e.g. centered on the logo) fuses with it in every
+channel and cannot be segmented; a few cm onto a plain area fixes it.
 
 ## 5-Week Schedule
 

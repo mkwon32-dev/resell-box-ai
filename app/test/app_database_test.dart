@@ -132,7 +132,7 @@ void main() {
         );
 
     final record = await db.getScan(legacyId);
-    expect(record!.result.scaleSource, ScaleSource.boxFace);
+    expect(record!.result.scaleSource, ScaleSource.card);
   });
 
   test('stored result remains valid JSON after save', () async {
