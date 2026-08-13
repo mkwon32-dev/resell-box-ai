@@ -18,3 +18,8 @@ sneaker-box-dataset/measurement/out/
 # Vendored/unrelated subprojects
 browser-search/
 outreach/
+.DS_Store
+
+# Qualcomm QAIRT/QNN SDK files
+app/android/app/src/main/cpp/include/QNN/
+app/android/app/src/main/jniLibs/arm64-v8a/libQnn*.so

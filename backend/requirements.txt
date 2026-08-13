@@ -1,5 +1,0 @@
-fastapi
-httpx
-numpy
-opencv-python-headless
-python-multipart

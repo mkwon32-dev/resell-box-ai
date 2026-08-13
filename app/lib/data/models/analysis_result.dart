@@ -1,3 +1,5 @@
+import 'dart:ui' show Offset;
+
 import 'detection.dart';
 import 'risk_verdict.dart';
 
@@ -10,7 +12,10 @@ enum ScaleSource {
   boxEdge('box_edge'),
 
   /// Box face rectified via homography; sizes are panel-relative estimates.
-  boxFace('box_face');
+  boxFace('box_face'),
+
+  /// Reference card (8.56 × 5.398 cm) detected in frame; most accurate scale.
+  card('card');
 
   const ScaleSource(this.wire);
 
@@ -18,11 +23,33 @@ enum ScaleSource {
 
   bool get hasScale => this != ScaleSource.none;
 
+  /// Short provenance note shown next to measurements.
+  String get label => switch (this) {
+    ScaleSource.card => 'Measured with reference card',
+    ScaleSource.boxFace => 'Estimated from box face',
+    ScaleSource.boxEdge => 'Rough estimate from box outline',
+    ScaleSource.none => 'Sizes unavailable',
+  };
+
   static ScaleSource fromWire(String value) => switch (value) {
     'box_edge' => ScaleSource.boxEdge,
     'box_face' => ScaleSource.boxFace,
+    'card' => ScaleSource.card,
     _ => ScaleSource.none,
   };
+}
+
+/// A detected reference card awaiting the user's confirmation. Transient:
+/// never serialized — the scan is only saved after the user chooses, with
+/// either the card-based or the [fallback] measurements.
+class CardConfirmation {
+  const CardConfirmation({required this.corners, required this.fallback});
+
+  /// Card quad in original-image pixels, polygon order.
+  final List<Offset> corners;
+
+  /// The result to save instead when the user rejects the card.
+  final AnalysisResult fallback;
 }
 
 class AnalysisResult {
@@ -32,6 +59,7 @@ class AnalysisResult {
     required this.detections,
     required this.verdict,
     required this.scaleSource,
+    this.cardConfirmation,
   });
 
   final int imageWidth;
@@ -39,6 +67,7 @@ class AnalysisResult {
   final List<Detection> detections;
   final RiskVerdict verdict;
   final ScaleSource scaleSource;
+  final CardConfirmation? cardConfirmation;
 
   /// The single damage fact cited next to the verdict word:
   /// largest measured damage, e.g. "tear 9.2 cm", or the first unsized
@@ -93,11 +122,17 @@ class AnalysisResult {
     if (rawCardDetected != null && rawCardDetected is! bool) {
       throw const FormatException('"card_detected" must be a boolean');
     }
-    final scaleSource = rawScaleSource != null
-        ? ScaleSource.fromWire(rawScaleSource as String)
-        : (rawCardDetected as bool? ?? false)
-        ? ScaleSource.boxFace
-        : ScaleSource.none;
+
+    final hasInlineMeasurement = detections.any(
+      (d) => d.widthCm != null || d.heightCm != null,
+    );
+    final scaleSource = switch (rawScaleSource) {
+      final String s => ScaleSource.fromWire(s),
+      _ =>
+        (rawCardDetected as bool? ?? false)
+            ? ScaleSource.card
+            : (hasInlineMeasurement ? ScaleSource.boxFace : ScaleSource.none),
+    };
 
     // `none` means there is no defensible pixel-to-cm conversion. Discard
     // stale/contradictory measurement fields so they cannot silently drive
@@ -105,6 +140,42 @@ class AnalysisResult {
     final usableDetections = scaleSource.hasScale
         ? detections
         : detections.map((d) => d.withoutMeasurements()).toList();
+
+    // A detected card arrives as a proposal: corners to draw plus the
+    // measurements to fall back to if the user rejects it. Only meaningful
+    // when there is damage to size.
+    CardConfirmation? cardConfirmation;
+    final rawCard = json['card'];
+    if (rawCard is Map<String, dynamic> && detections.isNotEmpty) {
+      final rawCorners = rawCard['corners'];
+      final corners = <Offset>[
+        if (rawCorners is List)
+          for (final c in rawCorners)
+            if (c is Map && c['x'] is num && c['y'] is num)
+              Offset((c['x'] as num).toDouble(), (c['y'] as num).toDouble()),
+      ];
+      if (corners.length == 4) {
+        final fallbackJson = {
+          ...json,
+          'card': null,
+          'verdict': null,
+          'scale_source': rawCard['fallback_scale_source'] as String? ?? 'none',
+          'predictions': [
+            for (final raw in rawPredictions)
+              if (raw is Map<String, dynamic>)
+                {
+                  ...raw,
+                  'width_cm': raw['fallback_width_cm'],
+                  'height_cm': raw['fallback_height_cm'],
+                },
+          ],
+        };
+        cardConfirmation = CardConfirmation(
+          corners: corners,
+          fallback: AnalysisResult.fromJson(fallbackJson),
+        );
+      }
+    }
 
     // Never allow a stale or compromised backend verdict to downgrade damage
     // that the documented local rules classify more severely.
@@ -120,6 +191,7 @@ class AnalysisResult {
           ? backendVerdict
           : computedVerdict,
       scaleSource: scaleSource,
+      cardConfirmation: cardConfirmation,
     );
   }
 

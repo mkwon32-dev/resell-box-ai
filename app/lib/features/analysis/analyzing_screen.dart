@@ -9,6 +9,8 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/theme.dart';
 import '../../app/tokens.dart';
+import '../../core/bbox_geometry.dart';
+import '../../data/models/analysis_result.dart';
 import '../../providers.dart';
 
 /// P0 "The Reveal", act one: shader scan-line sweeps the captured photo
@@ -50,7 +52,12 @@ class _AnalyzingScreenState extends ConsumerState<AnalyzingScreen>
       }
     });
     _loadAssets();
-    _run();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _run();
+      }
+    });
   }
 
   void _tick(Duration elapsed) {
@@ -98,7 +105,7 @@ class _AnalyzingScreenState extends ConsumerState<AnalyzingScreen>
   Future<void> _run() async {
     final started = DateTime.now();
     try {
-      final scanId = await ref
+      final step = await ref
           .read(analysisControllerProvider.notifier)
           .analyze(widget.photo);
       // Hold tension: minimum 2.2s in this screen.
@@ -109,9 +116,19 @@ class _AnalyzingScreenState extends ConsumerState<AnalyzingScreen>
         );
       }
       if (!mounted) return;
-      _pendingScanId = scanId;
-      setState(() => _done = true);
-    } catch (e) {
+      switch (step) {
+        case AnalyzeSaved(:final scanId):
+          _pendingScanId = scanId;
+          setState(() => _done = true);
+        case AnalyzeNeedsCardConfirm(:final result):
+          _ticker.stop();
+          _captionTimer?.cancel();
+          setState(() => _cardConfirm = result);
+      }
+    } catch (e, stackTrace) {
+      debugPrint('ANALYSIS SCREEN ERROR: $e');
+      debugPrintStack(stackTrace: stackTrace);
+
       if (mounted) {
         _ticker.stop();
         _captionTimer?.cancel();
@@ -120,7 +137,30 @@ class _AnalyzingScreenState extends ConsumerState<AnalyzingScreen>
     }
   }
 
+  Future<void> _resolveCard(bool useCard) async {
+    if (_resolvingCard) return;
+    setState(() => _resolvingCard = true);
+    try {
+      final id = await ref
+          .read(analysisControllerProvider.notifier)
+          .resolveCardConfirmation(useCard: useCard);
+      if (mounted) context.pushReplacement('/result/$id', extra: true);
+    } catch (e, stackTrace) {
+      debugPrint('CARD CONFIRM ERROR: $e');
+      debugPrintStack(stackTrace: stackTrace);
+      if (mounted) {
+        setState(() {
+          _error = e;
+          _cardConfirm = null;
+          _resolvingCard = false;
+        });
+      }
+    }
+  }
+
   int? _pendingScanId;
+  AnalysisResult? _cardConfirm;
+  bool _resolvingCard = false;
 
   void _navigate() {
     final id = _pendingScanId;
@@ -143,6 +183,90 @@ class _AnalyzingScreenState extends ConsumerState<AnalyzingScreen>
     final text = Theme.of(context).textTheme;
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
 
+    final cardConfirm = _cardConfirm;
+    if (cardConfirm != null && _error == null) {
+      return Scaffold(
+        backgroundColor: AppTokens.bg,
+        body: SafeArea(
+          child: Column(
+            children: [
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(AppTokens.s5),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) => Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        Image.file(
+                          widget.photo,
+                          fit: BoxFit.contain,
+                          errorBuilder: (context, error, stackTrace) =>
+                              const Center(
+                            child: Icon(
+                              Icons.broken_image_outlined,
+                              size: 48,
+                              color: AppTokens.textFaint,
+                            ),
+                          ),
+                        ),
+                        CustomPaint(
+                          painter: _CardOutlinePainter(
+                            corners: cardConfirm.cardConfirmation!.corners,
+                            imageSize: Size(
+                              cardConfirm.imageWidth.toDouble(),
+                              cardConfirm.imageHeight.toDouble(),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(AppTokens.s5),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('REFERENCE CARD?', style: text.displaySmall),
+                    const SizedBox(height: AppTokens.s2),
+                    Text(
+                      'A card-sized object was detected (outlined). Use it '
+                      'as the size reference? It should be a real '
+                      'credit-card-sized card lying next to the damage.',
+                      style: text.bodyMedium,
+                    ),
+                    const SizedBox(height: AppTokens.s4),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton(
+                            onPressed: _resolvingCard
+                                ? null
+                                : () => _resolveCard(true),
+                            child: const Text('Use card'),
+                          ),
+                        ),
+                        const SizedBox(width: AppTokens.s3),
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: _resolvingCard
+                                ? null
+                                : () => _resolveCard(false),
+                            child: const Text('No card'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     if (_error != null) {
       return Scaffold(
         body: Center(
@@ -155,6 +279,11 @@ class _AnalyzingScreenState extends ConsumerState<AnalyzingScreen>
                 Text('SCAN FAILED', style: text.displaySmall),
                 const SizedBox(height: AppTokens.s3),
                 Text('Could not analyze this photo.', style: text.bodyMedium),
+            const SizedBox(height: AppTokens.s3),
+            Text(
+              _error.toString(),
+              style: text.bodySmall,
+            ),
                 const SizedBox(height: AppTokens.s5),
                 FilledButton(
                   onPressed: () => context.pushReplacement('/capture'),
@@ -229,6 +358,49 @@ class _AnalyzingScreenState extends ConsumerState<AnalyzingScreen>
       ),
     );
   }
+}
+
+/// Draws the detected card quad over a photo rendered with BoxFit.contain.
+class _CardOutlinePainter extends CustomPainter {
+  _CardOutlinePainter({required this.corners, required this.imageSize});
+
+  final List<Offset> corners;
+  final Size imageSize;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (corners.length != 4) return;
+    final mapped = [
+      for (final c in corners)
+        scaleDetectionToCanvas(
+          cx: c.dx,
+          cy: c.dy,
+          w: 0,
+          h: 0,
+          imageSize: imageSize,
+          canvasSize: size,
+        ).center,
+    ];
+    final path = Path()..addPolygon(mapped, true);
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.fill
+        ..color = AppTokens.riskCaution.withValues(alpha: .18),
+    );
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3
+        ..strokeJoin = StrokeJoin.round
+        ..color = AppTokens.riskCaution,
+    );
+  }
+
+  @override
+  bool shouldRepaint(_CardOutlinePainter oldDelegate) =>
+      oldDelegate.corners != corners || oldDelegate.imageSize != imageSize;
 }
 
 class _ScanShaderPainter extends CustomPainter {

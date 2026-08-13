@@ -25,10 +25,18 @@ class DamageListTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final d = detection;
-    // Tilde: sizes are estimates derived from nominal box dimensions.
-    final size = sizesAvailable && d.hasSize
-        ? '~${d.widthCm!.toStringAsFixed(1)} × ${d.heightCm!.toStringAsFixed(1)} cm'
-        : '—';
+    final sizeText = switch (d.damageClass) {
+      DamageClass.dent => d.hasSize
+          ? 'Size: ${d.widthCm!.toStringAsFixed(1)} × ${d.heightCm!.toStringAsFixed(1)} cm'
+          : 'Measurement unavailable',
+      DamageClass.surfaceDamage => d.longestSideCm != null && d.longestSideCm!.isFinite
+          ? 'Length: ${d.longestSideCm!.toStringAsFixed(1)} cm'
+          : 'Measurement unavailable',
+      _ => d.hasSize
+          ? 'Size: ${d.widthCm!.toStringAsFixed(1)} × ${d.heightCm!.toStringAsFixed(1)} cm'
+          : 'Measurement unavailable',
+    };
+    final displayText = sizesAvailable ? sizeText : 'Measurement unavailable';
 
     return InkWell(
       onTap: onTap,
@@ -72,7 +80,7 @@ class DamageListTile extends StatelessWidget {
                 ),
               ),
             ),
-            Expanded(child: Text(size, style: AppText.mono(size: 14))),
+            Expanded(child: Text(displayText, style: AppText.mono(size: 14))),
             Text(
               '${(d.confidence * 100).round()}%',
               style: AppText.mono(size: 13, color: AppTokens.textSecondary),

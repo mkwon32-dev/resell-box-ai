@@ -142,17 +142,26 @@ class _ResultScreenState extends ConsumerState<ResultScreen>
         ),
       ),
     );
-    final scaleWarning = !result.scaleSource.hasScale
-        ? Padding(
+    // Provenance line: warn when sizes are unavailable, otherwise say how
+    // the cm scale was obtained (card beats box-face beats box-edge).
+    final scaleWarning = result.detections.isEmpty && result.scaleSource.hasScale
+        ? null
+        : Padding(
             padding: const EdgeInsets.symmetric(horizontal: AppTokens.s5),
             child: Text(
-              result.detections.isEmpty
+              result.scaleSource.hasScale
+                  ? result.scaleSource.label
+                  : result.detections.isEmpty
                   ? 'Box not fully in frame'
                   : 'No box edges — sizes unavailable',
-              style: AppText.mono(size: 12, color: AppTokens.riskCaution),
+              style: AppText.mono(
+                size: 12,
+                color: result.scaleSource.hasScale
+                    ? AppTokens.textSecondary
+                    : AppTokens.riskCaution,
+              ),
             ),
-          )
-        : null;
+          );
     final rows = FadeTransition(
       opacity: _rows,
       child: SlideTransition(
