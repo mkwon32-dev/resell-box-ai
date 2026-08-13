@@ -239,10 +239,22 @@ class MainActivity : FlutterActivity() {
         // Stop the worker before closing the detector: freeing the
         // interpreter under a running inference would crash native code.
         analysisExecutor.shutdown()
-        if (!analysisExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-            analysisExecutor.shutdownNow()
+        val drained = try {
+            analysisExecutor.awaitTermination(5, TimeUnit.SECONDS)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt() // teardown must not swallow it
+            false
         }
-        detector?.close()
+        if (drained) {
+            detector?.close()
+        } else {
+            // TFLite inference is uninterruptible native work, so shutdownNow
+            // cannot guarantee the worker has stopped. Closing the interpreter
+            // now would be the very crash this ordering exists to avoid; let
+            // process teardown reclaim it instead.
+            analysisExecutor.shutdownNow()
+            Log.w("MainActivity", "Analysis still running at teardown; leaving detector to the process")
+        }
         detector = null
         super.onDestroy()
     }
