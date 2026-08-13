@@ -11,12 +11,12 @@ class QnnService {
     File image, {
     bool forceCpuOnly = false,
   }) async {
+    // Confidence and NMS thresholds live in TFLiteDetector; sending them here
+    // only implied they were configurable when the native side ignored them.
     final result = await _channel.invokeMapMethod<String, dynamic>(
       'analyzeImage',
       {
         'imagePath': image.path,
-        'confidenceThreshold': 0.20,
-        'nmsThreshold': 0.45,
         'forceCpuOnly': forceCpuOnly,
       },
     );

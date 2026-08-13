@@ -14,25 +14,19 @@ class QnnAnalysisRepository implements AnalysisRepository {
 
   @override
   Future<AnalysisResult> analyze(File image) async {
-    debugPrint('QNN STEP 1: Repository called');
-    debugPrint('QNN image path: ${image.path}');
-
     try {
       final rawResult = await _service.analyze(image);
-      debugPrint('QNN STEP 2: Native result received');
-      debugPrint('QNN raw result: $rawResult');
-
       final result = _normalizeMap(rawResult);
-      debugPrint('QNN STEP 3: Result normalized');
-      debugPrint('QNN normalized result: $result');
-
-      final parsed = AnalysisResult.fromJson(result);
-      debugPrint('QNN STEP 4: Result parsed successfully');
-
-      return parsed;
+      // Photo paths and full detection payloads are user data; keep the
+      // trace out of release logs. debugPrint still prints in release builds.
+      if (kDebugMode) {
+        debugPrint('QNN analyze: ${image.path}');
+        debugPrint('QNN normalized result: $result');
+      }
+      return AnalysisResult.fromJson(result);
     } catch (error, stackTrace) {
       debugPrint('QNN ERROR: $error');
-      debugPrintStack(stackTrace: stackTrace);
+      if (kDebugMode) debugPrintStack(stackTrace: stackTrace);
       rethrow;
     }
   }

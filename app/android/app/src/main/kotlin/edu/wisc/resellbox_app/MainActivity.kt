@@ -3,7 +3,12 @@ package edu.wisc.resellbox_app
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import androidx.exifinterface.media.ExifInterface
 import com.resellbox.ai.data.DamageMeasurement
 import com.resellbox.ai.data.TFLiteDetector
@@ -19,6 +24,11 @@ class MainActivity : FlutterActivity() {
 
     private var detector: TFLiteDetector? = null
     private val damageMeasurement by lazy { DamageMeasurement(applicationContext) }
+
+    // Single worker: analyses are serialized anyway (one detector instance),
+    // and this keeps the heavy work off the main thread.
+    private val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -48,7 +58,15 @@ class MainActivity : FlutterActivity() {
                         return@setMethodCallHandler
                     }
 
-                    analyzeImage(imagePath, result, forceCpuOnly)
+                    // Decode + inference + measurement take seconds. Method
+                    // channel handlers run on the main thread, so doing this
+                    // inline freezes the UI and risks an ANR; hop to a worker
+                    // and post the reply back, since MethodChannel.Result must
+                    // be answered on the main thread.
+                    analysisExecutor.execute {
+                        val reply = runAnalysis(imagePath, forceCpuOnly)
+                        mainHandler.post { reply.deliver(result) }
+                    }
                 }
 
                 else -> result.notImplemented()
@@ -56,34 +74,38 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun analyzeImage(
+    /** Outcome of a background analysis, replayed onto the main thread. */
+    private sealed interface Reply {
+        fun deliver(result: MethodChannel.Result)
+
+        data class Ok(val payload: Map<String, Any?>) : Reply {
+            override fun deliver(result: MethodChannel.Result) = result.success(payload)
+        }
+
+        data class Failure(val code: String, val message: String) : Reply {
+            override fun deliver(result: MethodChannel.Result) =
+                result.error(code, message, null)
+        }
+    }
+
+    private fun runAnalysis(
         imagePath: String,
-        result: MethodChannel.Result,
         forceCpuOnly: Boolean = false
-    ) {
+    ): Reply {
         try {
             val currentDetector = resolveDetector(forceCpuOnly)
-            if (currentDetector == null) {
-                result.error(
+                ?: return Reply.Failure(
                     "DETECTOR_ERROR",
-                    "TFLite detector is not initialized",
-                    null
+                    "TFLite detector is not initialized"
                 )
-                return
-            }
 
             val bitmap = decodeBitmapWithExif(imagePath)
-
-            if (bitmap == null) {
-                result.error(
+                ?: return Reply.Failure(
                     "IMAGE_ERROR",
-                    "Failed to decode image: $imagePath",
-                    null
+                    "Failed to decode image: $imagePath"
                 )
-                return
-            }
 
-            when (val detectionResult = currentDetector.detect(bitmap)) {
+            return when (val detectionResult = currentDetector.detect(bitmap)) {
 
                 is TFLiteDetector.Result.Ok -> {
                     val predictions = detectionResult.predictions
@@ -133,23 +155,19 @@ class MainActivity : FlutterActivity() {
                             "fallback_scale_source" to (outcome.fallback?.scaleSource ?: "none")
                         )
                     }
-                    result.success(payload)
+                    Reply.Ok(payload)
                 }
 
-                is TFLiteDetector.Result.Error -> {
-                    result.error(
-                        "INFERENCE_ERROR",
-                        detectionResult.message,
-                        null
-                    )
-                }
+                is TFLiteDetector.Result.Error -> Reply.Failure(
+                    "INFERENCE_ERROR",
+                    detectionResult.message
+                )
             }
 
         } catch (e: Exception) {
-            result.error(
+            return Reply.Failure(
                 "INFERENCE_ERROR",
-                e.message ?: "Unknown inference error",
-                null
+                e.message ?: "Unknown inference error"
             )
         }
     }
@@ -218,6 +236,12 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        // Stop the worker before closing the detector: freeing the
+        // interpreter under a running inference would crash native code.
+        analysisExecutor.shutdown()
+        if (!analysisExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+            analysisExecutor.shutdownNow()
+        }
         detector?.close()
         detector = null
         super.onDestroy()

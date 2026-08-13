@@ -1,6 +1,7 @@
 package com.resellbox.ai.data
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.os.Build
 import android.util.Log
@@ -207,7 +208,7 @@ class TFLiteDetector(
                 )
             }
 
-            saveDebugInput(canvasBmp)
+            if (isDebuggable) saveDebugInput(canvasBmp)
 
             val input = buildInputBuffer(canvasBmp)
 
@@ -274,6 +275,11 @@ class TFLiteDetector(
             )
         }
     }
+
+    /** Debug builds only: the input dump costs a synchronous PNG encode per
+     *  inference, which is pure overhead once the model is trusted. */
+    private val isDebuggable: Boolean
+        get() = (appContext.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
     private fun saveDebugInput(bmp: Bitmap) {
         try {
