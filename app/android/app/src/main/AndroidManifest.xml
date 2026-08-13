@@ -21,13 +21,10 @@
         android:name="android.hardware.camera.any"
         android:required="false"/>
 
-    <!-- Demo backend is plain HTTP on the LAN; release builds block
-         cleartext by default. Remove when the backend gets TLS. -->
     <application
         android:label="Box Damage AI"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher"
-        android:usesCleartextTraffic="true">
+        android:icon="@mipmap/ic_launcher">
         <activity
             android:name=".MainActivity"
             android:exported="true"

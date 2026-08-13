@@ -49,7 +49,11 @@ class DamageMeasurement(private val context: android.content.Context) {
      * throws EACCES in release builds.
      */
     private fun writeDebugBitmap(bitmap: Bitmap, fileName: String): String? = runCatching {
-        val dir = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES), "resellbox_debug")
+        // External files dir is null when external storage is unmounted;
+        // fall back to internal storage so debug output still lands somewhere.
+        val base = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+            ?: context.filesDir
+        val dir = File(base, "resellbox_debug")
         dir.mkdirs()
         val outputFile = File(dir, fileName)
         FileOutputStream(outputFile).use { stream ->
@@ -1185,6 +1189,10 @@ class DamageMeasurement(private val context: android.content.Context) {
 
     private fun isConvexQuad(points: List<Point>): Boolean {
         if (points.size != 4) return false
+        // A convex polygon turns the same way at every vertex, so all cross
+        // products share one sign. Mixed signs mean concave -- requiring both
+        // signs (as this did) inverted the test and rejected every valid card
+        // quad the line-quad path produced.
         var hasPositive = false
         var hasNegative = false
         for (i in points.indices) {
@@ -1195,7 +1203,7 @@ class DamageMeasurement(private val context: android.content.Context) {
             if (cross > 0.0) hasPositive = true
             else if (cross < 0.0) hasNegative = true
         }
-        return hasPositive && hasNegative
+        return hasPositive != hasNegative
     }
 
     private fun averagePoint(points: List<Point>): Point {
