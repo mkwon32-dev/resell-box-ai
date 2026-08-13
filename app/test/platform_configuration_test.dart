@@ -48,7 +48,7 @@ void main() {
           reason:
               'The app uses scoped cache files and the system photo picker.',
         );
-        expect(manifest, contains('android:label="ResellBox AI"'));
+        expect(manifest, contains('android:label="Box Damage AI"'));
       },
     );
 
@@ -60,7 +60,7 @@ void main() {
       expect(
         infoPlist,
         contains(
-          '<key>CFBundleDisplayName</key>\n\t<string>ResellBox AI</string>',
+          '<key>CFBundleDisplayName</key>\n\t<string>Box Damage AI</string>',
         ),
       );
     });

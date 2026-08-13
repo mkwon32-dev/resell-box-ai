@@ -6,16 +6,16 @@ import 'app/theme.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const ProviderScope(child: ResellBoxApp()));
+  runApp(const ProviderScope(child: BoxDamageApp()));
 }
 
-class ResellBoxApp extends StatelessWidget {
-  const ResellBoxApp({super.key});
+class BoxDamageApp extends StatelessWidget {
+  const BoxDamageApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp.router(
-      title: 'ResellBox',
+      title: 'Box Damage AI',
       debugShowCheckedModeBanner: false,
       theme: buildAppTheme(),
       routerConfig: appRouter,

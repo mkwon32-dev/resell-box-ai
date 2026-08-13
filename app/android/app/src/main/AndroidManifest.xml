@@ -24,7 +24,7 @@
     <!-- Demo backend is plain HTTP on the LAN; release builds block
          cleartext by default. Remove when the backend gets TLS. -->
     <application
-        android:label="ResellBox AI"
+        android:label="Box Damage AI"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">
