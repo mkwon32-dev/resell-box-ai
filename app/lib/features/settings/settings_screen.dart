@@ -35,7 +35,7 @@ class SettingsScreen extends StatelessWidget {
                     Text('ABOUT', style: text.displaySmall),
                     const SizedBox(height: AppTokens.s5),
                     Text(
-                      'ResellBox AI detects sneaker-box damage from close-up '
+                      'Box Damage AI detects sneaker-box damage from close-up '
                       'photos and scores resale risk. School project — not '
                       'affiliated with StockX or GOAT.',
                       style: text.bodyMedium,

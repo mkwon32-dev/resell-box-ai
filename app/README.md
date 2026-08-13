@@ -1,6 +1,8 @@
-# ResellBox AI
+<img src="../docs/logo.png" alt="Box Damage AI" width="96">
 
-ResellBox AI is an Android app that detects visible sneaker box damage from uploaded or captured photos.
+# Box Damage AI
+
+Box Damage AI is an Android app that detects visible sneaker box damage from uploaded or captured photos.
 
 The app uses Flutter for the UI, Kotlin for the Android-native inference bridge, TensorFlow Lite for YOLO model execution, and a Qualcomm QNN TFLite Delegate attempt with automatic CPU fallback.
 

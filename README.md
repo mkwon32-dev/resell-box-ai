@@ -1,12 +1,14 @@
-# ResellBox AI
+<img src="docs/banner.png" alt="Box Damage AI" width="100%">
+
+# Box Damage AI
 
 AI system for detecting sneaker box damage and estimating resale-risk from photos.
 
-**[⬇ Download the Android app (APK)](https://github.com/mkwon32-dev/resell-box-ai/releases/latest)** — install on any Android phone; no setup, talks to the hosted backend.
+**[⬇ Download the Android app (APK)](https://github.com/mkwon32-dev/resell-box-ai/releases/latest)** — install on any Android phone; no setup, everything runs on-device.
 
 ## Goal
 
-ResellBox AI analyzes box damage from a user-uploaded photo and returns:
+Box Damage AI analyzes box damage from a user-uploaded photo and returns:
 
 - damage type
 - detected damage location
@@ -93,9 +95,8 @@ Keep the whole box in frame. Optionally lay a credit-card-sized card
 (8.56 × 5.398 cm) flat next to the damage for the most accurate sizing.
 ```
 
-Measurement ladder (on-device: `DamageMeasurement.kt` + `BoxFaceMeasurement.kt`;
-Python prototype of the card-free tiers:
-`sneaker-box-dataset/measurement/measure_box_face.py`), from most to least
+Measurement ladder (`DamageMeasurement.kt` for the card tier,
+`BoxFaceMeasurement.kt` for the card-free tiers), from most to least
 accurate — the card is auto-detected, no user toggle:
 
 | Scene | Method | `scale_source` | Verdict behavior |
